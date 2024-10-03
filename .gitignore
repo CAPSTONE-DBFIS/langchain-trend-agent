@@ -154,7 +154,7 @@ dmypy.json
 cython_debug/
 
 # YAML 설정 파일 제외
-configs/config.yaml
+config/config.yaml
 *.yaml
 
 # PyCharm
