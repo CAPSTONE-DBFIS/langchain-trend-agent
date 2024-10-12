@@ -2,6 +2,7 @@
 Repository for crawling
 
 # directory 구조
+```
 crawling/
 │
 ├── configs/            # 설정 파일 디렉터리
@@ -30,3 +31,4 @@ crawling/
 ├── requirements.txt    # 프로젝트 의존성 패키지 리스트
 ├── README.md           # 프로젝트 설명 파일
 └── .env                # 환경 변수 파일 (API 키, 데이터베이스 비밀번호 등)
+```
