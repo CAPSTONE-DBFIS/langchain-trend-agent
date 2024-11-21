@@ -23,6 +23,7 @@ crawling/
 │   ├── main.py         # 메인 실행 파일
 │   ├── scraper.py      # 스크래핑 관련 코드
 │   └── parser.py       # HTML 파싱 관련 코드
+|   └── classification.py       # 키워드 빈도수 추출
 │
 ├── tests/              # 테스트 코드 디렉터리
 │   ├── test_scraper.py # 크롤링 테스트
