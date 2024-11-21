@@ -77,8 +77,8 @@ def parse_data(raw_html, url):
     date = date_tag.get_text(strip=True) if date_tag else "No date found"
 
     # 기사 내용 추출
-    content_tag = soup.find('div', id='newsct_article')
-    content = content_tag.get_text(strip=True) if content_tag else "No content found"
+    # content_tag = soup.find('div', id='newsct_article')
+    # content = content_tag.get_text(strip=True) if content_tag else "No content found"
 
     # 이미지 URL과 원본 URL 가져오기
     image, base_url, comment_count = selenium_scrape(url)
@@ -89,7 +89,7 @@ def parse_data(raw_html, url):
         "media_company": media_name,
         "title": title,
         "date": date,
-        "content": content,
+        # "content": content,
         "comment_count": comment_count,
         "image": image,
         "url": base_url

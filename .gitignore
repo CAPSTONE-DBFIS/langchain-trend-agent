@@ -168,3 +168,10 @@ config/config.yaml
 *.yaml
 /data/output
 /config
+요구사항.txt
+notebooks/analysis.ipynb
+data/texts/reddit_4.txt
+data/texts/reddit_3.txt
+data/texts/reddit_2.txt
+data/texts/reddit_1.txt
+data/texts/reddit_0.txt
