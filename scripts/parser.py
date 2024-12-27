@@ -5,22 +5,25 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
-import requests
 
 # 웹드라이버 재사용을 위한 전역 드라이버 변수
 driver = None
 
 
+# 드라이버 초기화 함수
 def init_driver():
-    global driver
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--blink-settings=imagesEnabled=false")
 
-    # 크롬 드라이버 초기화
-    service = Service(executable_path='../lib/chromedriver-win64/chromedriver.exe')
+    # 명시적으로 chromedriver 경로 설정
+    driver_path = "/opt/homebrew/bin/chromedriver"  # 직접 설정한 chromedriver 경로
+    service = Service(driver_path)  # Service 객체에 chromedriver 경로 설정
+
+    global driver
     driver = webdriver.Chrome(service=service, options=chrome_options)
 
 
@@ -50,7 +53,7 @@ def selenium_scrape(url):
             EC.presence_of_element_located((By.CLASS_NAME, "u_cbox_count"))
         )
         comment_count = comment_element.text.strip() if comment_element.text else "No comment found"
-    except: # 예외 처리
+    except:  # 예외 처리
         base_url = url
         img_url = "No image"
         comment_count = "No comment found"
@@ -77,8 +80,8 @@ def parse_data(raw_html, url):
     date = date_tag.get_text(strip=True) if date_tag else "No date found"
 
     # 기사 내용 추출
-    # content_tag = soup.find('div', id='newsct_article')
-    # content = content_tag.get_text(strip=True) if content_tag else "No content found"
+    content_tag = soup.find('div', id='newsct_article')
+    content = content_tag.get_text(strip=True) if content_tag else "No content found"
 
     # 이미지 URL과 원본 URL 가져오기
     image, base_url, comment_count = selenium_scrape(url)
@@ -89,7 +92,7 @@ def parse_data(raw_html, url):
         "media_company": media_name,
         "title": title,
         "date": date,
-        # "content": content,
+        "content": content,
         "comment_count": comment_count,
         "image": image,
         "url": base_url

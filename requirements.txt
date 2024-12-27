@@ -1,8 +1,8 @@
-#설정 파일
-PyYAML==6.0.2           #설정을 위한 YAML 패키지
+# 설정 파일
+PyYAML==6.0.2           # 설정을 위한 YAML 패키지
 
-#환경변수
-python-dotenv==1.0.1           #환경변수 설정을 위한 패키지
+# 환경변수
+python-dotenv==1.0.1           # 환경변수 설정을 위한 패키지
 
 # 웹 스크래핑 및 데이터 수집 관련 패키지
 requests==2.32.3           # HTTP 요청 라이브러리
@@ -14,3 +14,15 @@ pandas==2.2.3              # 데이터프레임을 사용한 데이터 분석
 
 # 테스트 및 디버깅 패키지
 pytest==8.3.3              # 파이썬 테스트 프레임워크
+
+# Milvus 관련 패키지
+pymilvus==2.4.0            # Milvus 클라이언트 라이브러리
+
+# OpenAI 관련 패키지
+openai==0.27.4             # OpenAI API 사용을 위한 패키지
+
+# LangChain 관련 패키지
+langchain==0.0.198         # LangChain 라이브러리 (Embedding 관련)
+
+# Tiktoken 관련 패키지
+tiktoken==0.3.0            # OpenAI 임베딩에 필요한 토크나이저 패키지
