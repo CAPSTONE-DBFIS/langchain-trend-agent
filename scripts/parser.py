@@ -6,9 +6,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 
-# 웹드라이버 재사용을 위한 전역 드라이버 변수
 driver = None
-
 
 # 드라이버 초기화 함수
 def init_driver():
@@ -19,7 +17,7 @@ def init_driver():
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--blink-settings=imagesEnabled=false")
 
-    # 명시적으로 chromedriver 경로 설정
+    # chromedriver 경로 설정 (개인별 변경 필요)
     driver_path = "/opt/homebrew/bin/chromedriver"  # 직접 설정한 chromedriver 경로
     service = Service(driver_path)  # Service 객체에 chromedriver 경로 설정
 

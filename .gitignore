@@ -175,3 +175,6 @@ data/texts/reddit_3.txt
 data/texts/reddit_2.txt
 data/texts/reddit_1.txt
 data/texts/reddit_0.txt
+
+# macOS specific files
+.DS_Store

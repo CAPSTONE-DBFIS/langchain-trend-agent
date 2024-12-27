@@ -1,4 +1,3 @@
-# embedding.py
 import os
 import openai
 from dotenv import load_dotenv
@@ -11,14 +10,12 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
     raise ValueError("OpenAI API 키가 설정되지 않았습니다. .env 파일을 확인하세요.")
 
+# 기사 본문 임베딩 생성
 def get_embedding(text):
-    """
-    주어진 텍스트에 대해 OpenAI 임베딩을 생성합니다.
-    """
     try:
         response = openai.Embedding.create(
             input=text,
-            model="text-embedding-3-small"
+            model="text-embedding-3-small" # 임베딩 모델
         )
         return response['data'][0]['embedding']
     except Exception as e:

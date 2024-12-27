@@ -10,11 +10,8 @@ load_dotenv()
 client_id = os.getenv('NAVER_CLIENT_ID')
 client_secret = os.getenv('NAVER_CLIENT_SECRET')
 
-
+# 네이버 뉴스 검색 API를 이용하여 카테고리에 해당하는 뉴스 URL을 가져오는 함수
 def naver_search(query, display=10, start=1):
-    """
-    네이버 뉴스 검색 API를 이용하여 카테고리에 해당하는 뉴스 URL을 가져옴
-    """
     url = "https://openapi.naver.com/v1/search/news.json"
 
     headers = {
@@ -37,11 +34,8 @@ def naver_search(query, display=10, start=1):
         print(f"Error Code: {response.status_code}")
         return []
 
-
+# 단일 URL에 대해 HTML을 요청하고 결과를 반환하는 함수
 def fetch_url(url):
-    """
-    단일 URL에 대해 HTML을 요청하고 결과를 반환
-    """
     try:
         response = requests.get(url)
         if response.status_code == 200:
@@ -53,11 +47,8 @@ def fetch_url(url):
         print(f"Error fetching URL: {url}, Error: {e}")
         return None, url
 
-
+# 카테고리별로 병렬 크롤링을 수행하고 결과를 반환하는 함수
 def scrape_data_by_category(categories):
-    """
-    카테고리별로 병렬 크롤링을 수행하고 결과를 반환
-    """
     all_raw_html_list = []
     all_url_list = []
 

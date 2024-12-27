@@ -1,6 +1,8 @@
-from pymilvus import connections, Collection, utility
+from langchain.vectorstores import Milvus
+from langchain.embeddings.openai import OpenAIEmbeddings
 from dotenv import load_dotenv
 import os
+from pymilvus import connections, Collection, utility
 
 # .env 파일 로드
 load_dotenv()
@@ -10,65 +12,45 @@ MILVUS_HOST = os.getenv("MILVUS_HOST")
 MILVUS_PORT = os.getenv("MILVUS_PORT")
 
 if not MILVUS_HOST or not MILVUS_PORT:
-    raise ValueError("MILVUS_HOST 또는 MILVUS_PORT가 .env 파일에 정의되어 있지 않습니다.")
+    raise ValueError("MILVUS_HOST 또는 MILVUS_PORT가 .env 파일에 정의되지 않았습니다.")
 
+# Milvus 연결
 def connect_to_milvus():
     connections.connect(host=MILVUS_HOST, port=MILVUS_PORT)
     print(f"Milvus에 연결되었습니다: {MILVUS_HOST}:{MILVUS_PORT}")
 
-def create_index(collection_name):
-    collection = Collection(collection_name)
-    if not collection.has_index():
-        print(f"컬렉션 '{collection_name}'에 인덱스를 생성 중...")
-        index_params = {
-            "index_type": "IVF_FLAT",
-            "metric_type": "L2",
-            "params": {"nlist": 128},
-        }
-        collection.create_index(field_name="embedding", index_params=index_params)
-        print(f"컬렉션 '{collection_name}'에 인덱스가 생성되었습니다.")
-    else:
-        print(f"컬렉션 '{collection_name}'에 이미 인덱스가 존재합니다.")
-
-def load_collection(collection_name):
+# 저장된 데이터 조회 함수 (벡터 및 메타데이터 조회)
+def verify_data_in_milvus(collection_name="news_article"):
+    # 컬렉션이 Milvus에 존재하는지 확인
     if collection_name not in utility.list_collections():
-        print(f"컬렉션 '{collection_name}'이 존재하지 않습니다.")
-        return None
-    collection = Collection(collection_name)
-    print(f"컬렉션 '{collection_name}' 로드 중...")
-    collection.load()
-    print(f"컬렉션 '{collection_name}'이 로드되었습니다.")
-    return collection
-
-def query_collection(collection_name):
-    collection = load_collection(collection_name)
-    if not collection:
+        print(f"컬렉션 '{collection_name}'이 Milvus에 존재하지 않습니다.")
         return
-
-    print(f"컬렉션 '{collection_name}'의 데이터 샘플 (1개):")
+    
+    # 컬렉션 로드
+    collection = Collection(collection_name)
+    print(f"컬렉션 '{collection_name}'이 로드되었습니다.")
+    
+    # 벡터와 메타데이터를 쿼리하여 존재 여부 확인
     data = collection.query(
-        expr="",  # 전체 데이터 조회
-        output_fields=["embedding", "category", "media_company", "url", "title", "date"],  # date 필드 추가
-        limit=1,
+        expr="",  # 모든 데이터 조회
+        output_fields=["vector", "category", "media_company", "url", "title", "date"],  # 벡터 및 메타데이터 조회
+        limit=1,  # 첫 번째 데이터만 조회
     )
+    
     if data:
-        print("데이터 1:", data[0])  # 첫 번째 데이터만 출력
+        print("Milvus에 저장된 데이터 샘플 (벡터 + 메타데이터):")
+        for doc in data:
+            print(doc)  # 벡터 및 메타데이터 출력
     else:
-        print("데이터가 없습니다.")
+        print("Milvus에 저장된 데이터가 없습니다.")
 
 if __name__ == "__main__":
     try:
         # Milvus 연결
         connect_to_milvus()
 
-        # 컬렉션 이름
-        collection_name = "news_articles"
-
-        # 인덱스 생성
-        create_index(collection_name)
-
-        # 데이터 쿼리
-        query_collection(collection_name)
+        # 데이터 확인 (저장된 벡터 및 메타데이터 조회)
+        verify_data_in_milvus()
 
     except Exception as e:
         print("에러가 발생했습니다:", str(e))
