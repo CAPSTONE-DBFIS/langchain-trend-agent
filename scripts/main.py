@@ -1,6 +1,6 @@
 from scraper import scrape_data_by_category
 from parser import parse_data, close_driver
-from classification import TextClassifier
+from classification import SemanticTextClassifier
 import pandas as pd
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -39,7 +39,7 @@ if __name__ == "__main__":
         print(f"크롤링 결과가 {raw_save_path}에 저장되었습니다.")
 
         # Classification 모듈 호출
-        classifier = TextClassifier(input_file=raw_save_path, output_dir=processed_dir)
+        classifier = SemanticTextClassifier(input_file=raw_save_path, output_dir=processed_dir)
         classifier.process_and_save()
 
     else:
