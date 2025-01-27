@@ -39,7 +39,7 @@ if __name__ == "__main__":
         print(f"크롤링 결과가 {RAW_DATA_PATH}에 저장되었습니다.")
 
         # Classification 모듈 호출
-        classifier = TextClassifier(input_file=RAW_DATA_PATH, output_dir=PROCESSED_DIR)
+        classifier = SemanticTextClassifier(input_file=RAW_DATA_PATH, output_dir=PROCESSED_DIR)
         classifier.process_and_save()
 
         # Milvus 연결

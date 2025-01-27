@@ -84,6 +84,8 @@ def parse_data(raw_html, url):
     # 이미지 URL과 원본 URL 가져오기
     image, base_url, comment_count = selenium_scrape(url)
 
+    print(f"API URL: {url}, Final URL: {base_url}")
+
     # 결과 데이터
     article_data = {
         "category": category,

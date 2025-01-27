@@ -2,6 +2,7 @@
 import os
 import requests
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
 # .env 파일 로드
 load_dotenv()
@@ -10,7 +11,7 @@ load_dotenv()
 client_id = os.getenv('NAVER_CLIENT_ID')
 client_secret = os.getenv('NAVER_CLIENT_SECRET')
 
-def naver_search(query, display=10, start=1):
+def naver_search(query, display=10, start=1, start_date=None, end_date=None):
     # 네이버 검색 API 요청 URL
     url = "https://openapi.naver.com/v1/search/news.json"
 
@@ -26,6 +27,12 @@ def naver_search(query, display=10, start=1):
         "display": display,  # 한 번에 표시할 검색 결과 개수
         "start": start  # 검색 시작 위치
     }
+
+    # 기간 설정 (YYYYMMDD 형식)
+    if start_date:
+        params["startDate"] = start_date
+    if end_date:
+        params["endDate"] = end_date
 
     # API 요청 보내기
     response = requests.get(url, headers=headers, params=params)
@@ -45,9 +52,17 @@ def scrape_data_by_category(categories):
     all_raw_html_list = []
     all_url_list = []
 
+    # 현재 날짜와 3개월 전 날짜 계산
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=90)
+
+    # 날짜를 YYYYMMDD 형식으로 변환
+    end_date_str = end_date.strftime('%Y%m%d')
+    start_date_str = start_date.strftime('%Y%m%d')
+
     for category in categories:
         print(f"크롤링 중인 카테고리: {category}")
-        urls = naver_search(category)
+        urls = naver_search(category, start_date=start_date_str, end_date=end_date_str)
 
         if urls is None or len(urls) == 0:
             print(f"No URLs found for category: {category}")
