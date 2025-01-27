@@ -11,7 +11,6 @@ load_dotenv()
 client_id = os.getenv('NAVER_CLIENT_ID')
 client_secret = os.getenv('NAVER_CLIENT_SECRET')
 
-
 def naver_search(query, display=10, start=1, start_date=None, end_date=None):
     # 네이버 검색 API 요청 URL
     url = "https://openapi.naver.com/v1/search/news.json"
