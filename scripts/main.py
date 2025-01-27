@@ -3,7 +3,7 @@ import time
 import os
 from scraper import scrape_data_by_category
 from parser import parse_data, close_driver
-from classification import TextClassifier
+from classification import SemanticTextClassifier
 from rag import *
 
 # 현재 스크립트 위치 기준으로 상대 경로 설정
