@@ -1,6 +1,6 @@
 # tests/test_parser.py
 
-from scripts.parser import parse_data
+from scripts.domestic_article.parser import parse_data
 
 
 def test_parse_data():

@@ -14,3 +14,9 @@ pandas==2.2.3              # 데이터프레임을 사용한 데이터 분석
 
 # 테스트 및 디버깅 패키지
 pytest==8.3.3              # 파이썬 테스트 프레임워크
+psycopg2~=2.9.10
+Flask~=3.1.0
+bs4~=0.0.2
+sentence-transformers~=3.3.1
+scikit-learn~=1.6.0
+konlpy~=0.6.0

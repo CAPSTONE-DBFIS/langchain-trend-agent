@@ -1,7 +1,6 @@
 # tests/test_scraper.py
 
-import pytest
-from scripts.scraper import scrape_data
+from scripts.domestic_article.scraper import scrape_data
 
 def test_scrape_data(monkeypatch):
     # 가짜 응답 데이터를 생성하여 요청이 성공적으로 이루어졌는지 테스트

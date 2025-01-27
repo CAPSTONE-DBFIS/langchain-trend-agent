@@ -7,7 +7,7 @@ from konlpy.tag import Okt
 
 
 class SemanticTextClassifier:
-    def __init__(self, input_file, output_dir, stopwords_file='../data/raw/stopwords.txt', threshold=0.7):
+    def __init__(self, input_file, output_dir, stopwords_file='../../data/raw/stopwords.txt', threshold=0.7):
         self.input_file = input_file
         self.output_dir = output_dir
         self.threshold = threshold
@@ -73,9 +73,8 @@ class SemanticTextClassifier:
 if __name__ == "__main__":
 
     classifier = SemanticTextClassifier(
-        # 테스트시 각자 환경에 맞게 경로 변경 필요.
-        input_file='../data/raw/article_data.csv',
-        output_dir='../data/processed/',
+        input_file='../../data/raw/article_data.csv',
+        output_dir='../../data/processed/',
         threshold=0.7
     )
     classifier.process_and_save()
