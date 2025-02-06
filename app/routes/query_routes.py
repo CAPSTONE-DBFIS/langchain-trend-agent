@@ -14,11 +14,13 @@ def handle_query():
             return jsonify({"error": "쿼리가 필요합니다."}), 400
 
         query = data['query'].strip()
+        session_id = data.get('session_id', 'default_session')  # 세션 ID 기본값 설정
+
         if not query:
             return jsonify({"error": "빈 쿼리는 허용되지 않습니다."}), 400
 
         # 쿼리 처리
-        results = process_user_query(query)
+        results = process_user_query(session_id, query)  # session_id 추가
 
         # 응답을 UTF-8 인코딩
         response = jsonify({"results": results})

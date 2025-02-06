@@ -66,7 +66,7 @@ def store_article_embedding(collection_name):
     embedding = HuggingFaceEmbeddings(model_name=MODEL)
 
     # 텍스트 스플리터 초기화
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=500)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
 
     # Milvus 벡터 스토어 초기화
     try:
