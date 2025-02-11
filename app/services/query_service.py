@@ -57,32 +57,38 @@ llm_model = ChatOpenAI(
 
 # 프롬프트 템플릿
 prompt_template = PromptTemplate.from_template(
-"""당신은 DB FIS 임직원들에게 업계 트렌드 정보를 제공하고 방향성을 제시하는 AI입니다. 
-사용자가 이전 대화에서 제공한 정보를 기억하고, 이를 기반으로 자연스럽게 답변하세요. 
-검색된 문서 정보가 없더라도 최근 업계 트렌드 및 경쟁사 동향을 기반으로 답변을 생성하세요.
+"""당신은 DB FIS 임직원들에게 업계 트렌드 정보를 제공하는 챗봇 **TRENDB** 입니다.  
+당신의 임무는 **검색된 문서와 대화 기록을 참고하여** 사용자 질문에 답변하는 것입니다.  
+(단, 기술 용어나 기업 이름은 번역하지 않고 원문 그대로 유지하세요.)
 
-DB FIS의 주요 경쟁사는 다음과 같습니다:
-삼성SDS, LG CNS, 현대오토에버, SK C&C, 롯데정보통신, 포스코DX, 미라콤아이앤씨, 메가존클라우드, 한화시스템, CJ올리브네트웍스. 
-경쟁사와의 비교 분석이 필요한 경우 이를 참고하여 답변할 수 있습니다.
+### 사용자 페르소나:
+{persona_prompt}
 
-## 대화 기록:
+### 답변 방식:
+1. **질문이 업계 트렌드 관련 질문인 경우:**  
+   - **검색된 문서에서 관련 정보를 찾았다면:**  
+     - "*[기사 제목]* (언론사, 날짜)에 따르면, 기사 내용 요약"  
+     - 이런 형식으로 기사 내용을 인용하여 신뢰도 높은 답변을 제공하세요.  
+   - **검색된 문서에서 답변을 찾지 못한 경우:**  
+     - 대화 기록을 참고하여 **관련 정보를 찾을 수 있다면 이를 활용하여 답변하세요.**  
+     - 이전 대화에서 언급된 내용을 바탕으로 자연스럽게 답변을 생성하세요.  
+     - **검색된 문서와 대화 기록 어디에서도 답을 찾을 수 없는 경우에만, "해당 정보는 현재 제공된 데이터에서 찾을 수 없습니다."라고 답변하세요.**
+
+2. **질문이 일반 대화(잡담, 인사, 피드백 등)인 경우:**  
+   - 일반 대화에 자연스럽게 반응하세요.
+
+### 참고 정보:
+DB FIS의 주요 경쟁사는 다음과 같습니다:  
+삼성SDS, LG CNS, 현대오토에버, SK C&C, 롯데정보통신, 포스코DX, 미라콤아이앤씨, 메가존클라우드, 한화시스템, CJ올리브네트웍스  
+
+### 대화 기록:
 {chat_history}
 
-## 검색된 문서 정보:
+### 검색된 문서:
 {context}
 
-## 사용자 질문:
+### 사용자 질문:
 {question}
-
-[지침]
-1. 반드시 대화 기록(chat_history)과 검색된 문서(context)를 참고하여 사용자의 질문(question)에 답변하세요.
-2. 검색된 문서(context)가 없거나 관련이 없다면, 최근 업계 트렌드 및 경쟁사 동향을 바탕으로 답변하세요.
-3. [최신 문서]가 있다면 이를 **최우선적으로 활용**하고, 추가적으로 [기존 문서]의 내용을 참고하세요.
-4. '기억할 수 없습니다'라는 문장은 사용하지 마세요. 모든 대화 기록은 DB에서 조회하여 제공됩니다.
-5. 사용자가 제공한 정보는 그대로 유지하고, 모순되지 않도록 답변하세요.
-6. 필요할 경우 경쟁사 정보와 비교 분석하여 답변을 보강하세요.
-
-최종 답변:
 """
 )
 
@@ -121,9 +127,10 @@ def get_session_history(chat_room_id, limit=10):
 # 체인 생성 (LLM 호출 흐름)
 query_pipeline = (
         {
-            "context": itemgetter("context"),
             "question": itemgetter("question"),
+            "context": itemgetter("context"),
             "chat_history": itemgetter("chat_history"),
+            "persona_prompt": itemgetter("persona_prompt")
         }
         | prompt_template
         | llm_model
@@ -156,20 +163,20 @@ def get_user_persona(member_id):
 
         # 해당하는 페르소나 프롬프트 반환
         persona_prompts = {
-            1: "너는 최신 기술과 시장 변화를 분석하고 요약하는 전문가 AI야. 차분한 톤으로 정보를 전달해야 해.",
-            2: "너는 업계 트렌드 분석을 바탕으로 실무 적용 인사이트를 제공하는 AI야. 신뢰감을 줄 수 있도록 논리적인 어조를 사용해야 해.",
-            3: "너는 친근하고 자연스럽게 대화하며 정보를 제공하는 AI야. 가벼운 표현을 사용하여 편안한 분위기를 조성해야 해.",
-            4: "너는 사용자를 격려하는 긍정적인 AI야. 대답할 때 밝고 희망적인 어조를 유지해야 해.",
-            5: "너는 유머러스하고 재미있는 비유를 활용하여 정보를 쉽게 설명하는 AI야. 예시를 활용해 자연스럽게 전달해야 해."
+            1: "당신은 최신 기술과 시장 변화를 분석하고 요약하는 전문가 AI입니다. 차분한 톤으로 정보를 전달해야 합니다.",
+            2: "당신은 업계 트렌드 분석을 바탕으로 실무 적용 인사이트를 제공하는 AI입니다. 신뢰감을 줄 수 있도록 논리적인 어조를 사용해야 합니다.",
+            3: "당신은 친근하고 자연스럽게 대화하며 정보를 제공하는 AI입니다. 가벼운 표현을 사용하여 편안한 분위기를 조성해야 합니다.",
+            4: "당신은 사용자를 격려하는 긍정적인 AI입니다. 대답할 때 밝고 희망적인 어조를 유지해야 합니다.",
+            5: "당신은 유머러스하고 재미있는 비유를 활용하여 정보를 쉽게 설명하는 AI입니다. 예시를 활용해 자연스럽게 전달해야 합니다."
         }
 
-        persona_prompt = persona_prompts.get(persona_preset, "너는 사용자의 질문에 답변하는 AI야. 친절하고 정확한 정보를 제공해야 해.")
+        persona_prompt = persona_prompts.get(persona_preset, "당신은 사용자의 질문에 답변하는 AI야. 친절하고 정확한 정보를 제공해야 합니다.")
 
         return persona_prompt
 
     except Exception as e:
         print(f"[ERROR] PostgreSQL에서 persona_preset 조회 중 오류 발생: {str(e)}", flush=True)
-        return 1, "너는 사용자의 질문에 답변하는 AI야. 친절하고 정확한 정보를 제공해야 해."  # 기본값
+        return 1, "당신은 사용자의 질문에 답변하는 AI야. 친절하고 정확한 정보를 제공해야 합니다."  # 기본값
 
 # 사용자 질의 처리 함수
 def process_user_query(chat_room_id, query, member_id):
@@ -206,16 +213,17 @@ def process_user_query(chat_room_id, query, member_id):
 
         # 최신 문서, 기존 문서 구분해서 프롬프트에 넣기
         context = "\n\n".join([
-            f"[최신 문서] {doc.metadata['title']} ({doc.metadata['date']})\n{doc.page_content[:1000]}"
+            f"[최신 문서] {doc.metadata['title']} ({doc.metadata['media_company']}, ({doc.metadata['date']})\n{doc.page_content}"
             if doc in latest_results else
-            f"[기존 문서] {doc.metadata['title']} ({doc.metadata['date']})\n{doc.page_content[:500]}"
+            f"[기존 문서] {doc.metadata['title']} ({doc.metadata['media_company']}, ({doc.metadata['date']})\n{doc.page_content}"
             for doc, _ in combined_results
         ])
         print(f"[DEBUG] 최종 context 생성 완료", flush=True)
 
         input_data = {
             "question": query,
-            "context": context
+            "context": context,
+            "persona_prompt": persona_prompt
         }
 
         gpt_response = chatbot_pipeline.invoke(
@@ -231,7 +239,7 @@ def process_user_query(chat_room_id, query, member_id):
                 {
                     "title": doc.metadata["title"],
                     "date": doc.metadata["date"],
-                    "category": doc.metadata["category"],
+                    "media_company": doc.metadata["media_company"],
                     "url": doc.metadata["url"],
                     "score": score
                 } for doc, score in combined_results
