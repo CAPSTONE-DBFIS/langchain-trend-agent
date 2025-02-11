@@ -93,7 +93,7 @@ DB FIS의 주요 경쟁사는 다음과 같습니다:
 )
 
 # PostgreSQL에서 대화 기록 가져오기
-def get_session_history(chat_room_id, limit=10):
+def get_session_history(chat_room_id):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -103,17 +103,17 @@ def get_session_history(chat_room_id, limit=10):
         FROM chat_messages
         WHERE chat_room_id = %s
         ORDER BY created_at ASC
-        LIMIT %s
         """
-        cursor.execute(query, (chat_room_id, limit))
+        cursor.execute(query, (chat_room_id,))
         messages = cursor.fetchall()
 
         chat_history = ChatMessageHistory()
+
         for user_msg, bot_response, timestamp in messages:
             chat_history.add_user_message(user_msg)
             chat_history.add_ai_message(bot_response)
 
-        print(f"[DEBUG] PostgreSQL에서 최근 {limit}개 대화 기록 로드 완료 (오름차순)", flush=True)
+        print(f"[DEBUG] PostgreSQL에서 {len(messages)}개의 대화 기록 로드 완료 (전체 대화 포함)", flush=True)
 
         cursor.close()
         conn.close()
