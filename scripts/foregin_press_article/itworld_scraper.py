@@ -77,7 +77,7 @@ def itworld_article_scraper(urls):
                     time_tag = spans[1]
                     date = time_tag.text.strip()if time_tag else "날짜 없음"
 
-            desc_tag = soup.find('h2', class_='content-subheadline')
+            desc_tag = soup.find('div', class_='core')
             desc = desc_tag.text.strip() if desc_tag else "요약 없음"
 
             articles.append({
