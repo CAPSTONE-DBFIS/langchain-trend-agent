@@ -21,7 +21,7 @@ def init_driver():
     chrome_options.add_argument("--blink-settings=imagesEnabled=false")
 
     # 크롬 드라이버 초기화
-    service = Service(executable_path='../../lib/chromedriver-win64/chromedriver.exe')
+    service = Service('/chromedriver-win64/chromedriver.exe')
     driver = webdriver.Chrome(service=service, options=chrome_options)
 
 
