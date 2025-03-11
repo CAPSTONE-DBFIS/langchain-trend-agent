@@ -1,75 +1,88 @@
-from scraper import scrape_data_by_category
+from scraper import scrape_articles_by_date
 from parser import parse_data, close_driver
 from classification import SemanticTextClassifier
+from datetime import datetime, timedelta
+import logging
 import pandas as pd
-import os
-import requests
-from concurrent.futures import ThreadPoolExecutor
 import time
+import os
+# from rag import *
 
-# 데이터 경로 설정
-raw_save_path = '../../data/raw/article_data.csv'
-processed_dir = '../../data/processed/'
+# 로그 디렉토리 설정
+LOG_DIR = "../../logs"
+LOG_FILE = os.path.join(LOG_DIR, "project.log")
 
-# Flask 서버 URL
-FLASK_SERVER_URL = "http://127.0.0.1:5432/upload"
+# 로그 디렉토리가 없으면 생성
+os.makedirs(LOG_DIR, exist_ok=True)
 
-def process_article(raw_html, url):
-    return parse_data(raw_html, url)
+# 데이터 저장 경로 설정
+raw_save_path = "../../data/raw/article_data.csv"
 
-# Flask 서버로 데이터 전송
-def send_to_server(data):
-    response = requests.post(FLASK_SERVER_URL, json=data)
-    if response.status_code == 200:
-        print("데이터가 성공적으로 전송되었습니다.")
-    else:
-        print(f"서버 응답 오류: {response.status_code}, {response.text}")
+# 로그 설정
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
+# 실행 시작 시간 기록
+start_time = time.time()
+logging.info("main.py 실행 시작")
 
 if __name__ == "__main__":
-    # 트렌드 키워드를 담은 CSV 파일에서 데이터 읽어오기
-    df = pd.read_csv("../../data/raw/it_companies_and_trends.csv", encoding="utf-8-sig")
-    categories = pd.concat([df['Competitors'], df['IT Trends']]).dropna().unique().tolist()
+    start_date = datetime.strptime("20250311", "%Y%m%d")
+    # 현재 날짜의 전날을 종료 날짜로 설정
+    end_date = datetime.today() - timedelta(days=1)
 
-    # 실행 시간 측정 시작
-    start_time = time.time()
+    logging.info(f"크롤링 범위: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
 
-    # 카테고리별로 데이터 크롤링 및 파싱
-    raw_html_list, url_list = scrape_data_by_category(categories)
+    # 크롤링 시작
+    article_data_list = scrape_articles_by_date(start_date, end_date)
 
-    if raw_html_list and url_list:
+    if article_data_list:
         all_data = []
 
-        # 순차적으로 URL과 HTML을 처리
-        for raw_html, url in zip(raw_html_list, url_list):
-            result = process_article(raw_html, url)
-            all_data.append(result)
+        for article_data in article_data_list:
+            result = parse_data(article_data["html"], article_data["url"])
+            if result:  # None이 아닌 경우만 저장
+                result["category"] = article_data["category"]  # 카테고리 추가
+                all_data.append(result)
 
-        # 데이터프레임으로 변환
+        # CSV 저장 (제목 없는 기사 제외됨)
         df = pd.DataFrame(all_data)
+        df.to_csv(raw_save_path, index=False, encoding="utf-8-sig")
+        # 댓글 개수 추가시 comment_count 추가
+        df = df[["category", "media_company", "title", "date", "content", "image", "url"]]
+        df.to_csv(raw_save_path, index=False, encoding="utf-8-sig")
 
-        # 중복 제거 (title과 url 기준)
-        df = df.drop_duplicates(subset=['title', 'url'], keep='first')
+        logging.info(f"크롤링 완료: {len(df)}개의 기사 저장됨")
 
-        # 중복 제거 후 데이터 저장
-        df.to_csv(raw_save_path, index=False, encoding='utf-8-sig')
-        print(f"크롤링 결과가 {raw_save_path}에 저장되었습니다.")
+        # Classification 모듈 호출
+        # classifier = SemanticTextClassifier(input_file=RAW_DATA_PATH, output_dir=PROCESSED_DIR)
+        # classifier.process_and_save()
+
+        # Milvus 연결
+        # connect_milvus()
+
+        # 기존 컬렉션 삭제 (이미 존재하면 삭제)
+        # remove_collection("news_article")
+
+        # 컬렉션 생성
+        # create_collection("news_article")
+
+        # 뉴스 임베딩 저장
+        # store_article_embedding("news_article")
+
     else:
-        print("크롤링 실패 또는 유효한 데이터를 찾지 못했습니다.")
+        logging.warning("크롤링 실패 또는 유효한 데이터 없음")
 
-    # 크롤링이 끝나면 드라이버 종료
-    close_driver()
-
-    classifier = SemanticTextClassifier(
-        input_file='../../data/raw/article_data.csv',
-        output_dir='../../data/processed/',
-        threshold=0.7
-    )
-    classifier.process_and_save()
-
-    # 데이터 전송
-    # if all_data:
-    #    send_to_server(all_data)
-
-    # 실행 시간 출력
+    # 실행 종료 로그 기록
     end_time = time.time()
-    print(f"전체 실행 시간: {end_time - start_time:.2f}초")
+    elapsed_time = round(end_time - start_time, 2)
+    logging.info(f"실행 종료 (소요 시간: {elapsed_time}초)")
+
+    print("크롤링이 완료되었습니다.")
+
+    # 드라이버 종료
+    # close_driver()
