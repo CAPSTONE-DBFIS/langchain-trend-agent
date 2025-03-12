@@ -123,5 +123,3 @@ if __name__ == "__main__":
         all_articles.extend(articles)
 
     print(all_articles[:2])
-    save_to_csv(all_articles, "../../data/raw/itworld_articles.csv")
-
