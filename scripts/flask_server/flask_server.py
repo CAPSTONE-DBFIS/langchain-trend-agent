@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, jsonify
 import psycopg2
 import os
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -147,7 +148,72 @@ def delete_article(article_id):
         print("❌ delete_article() 오류:", e)
         return jsonify({"error": str(e)}), 500
 
+# 날짜별 상위 10개 단어 빈도 조회
+@app.route("/api/word_frequencies", methods=["GET"])
+def get_word_frequencies():
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
 
+        cur.execute("SELECT date, word_counts FROM word_frequency ORDER BY date DESC;")
+        results = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        word_frequencies = [
+            {"date": row[0], "word_counts": json.loads(row[1])} for row in results
+        ]
+
+        return jsonify(word_frequencies), 200
+
+    except Exception as e:
+        print("❌ get_word_frequencies() 오류:", e)
+        return jsonify({"error": str(e)}), 500
+
+
+# 날짜별 단어 빈도 데이터 업로드
+@app.route("/api/word_frequencies/upload", methods=["POST"])
+def upload_word_frequencies():
+    data = request.json  # JSON 데이터 받기
+
+    if not isinstance(data, list):
+        return jsonify({"error": "데이터 형식이 잘못되었습니다. 리스트 형태여야 합니다."}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        create_table_query = """
+        CREATE TABLE IF NOT EXISTS word_frequency (
+            id SERIAL PRIMARY KEY,
+            date DATE NOT NULL,
+            word_counts JSONB NOT NULL,
+            UNIQUE(date)
+        );
+        """
+        cur.execute(create_table_query)
+        conn.commit()
+
+        for entry in data:
+            date = entry["date"]
+            word_counts_json = json.dumps(entry["word_counts"], ensure_ascii=False)
+
+            insert_query = """
+            INSERT INTO word_frequency (date, word_counts)
+            VALUES (%s, %s)
+            ON CONFLICT (date) DO UPDATE
+            SET word_counts = EXCLUDED.word_counts;
+            """
+            cur.execute(insert_query, (date, word_counts_json))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"message": "단어 빈도 데이터가 저장되었습니다."}), 201
+
+    except Exception as e:
+        print("❌ upload_word_frequencies() 오류:", e)
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(debug=True, port=8080)
