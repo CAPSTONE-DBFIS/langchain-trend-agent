@@ -60,7 +60,7 @@ def scrape_articles_by_date(start_date, end_date):
             driver.get(url)
             time.sleep(3)  # 초기 페이지 로드 대기
 
-            # 기사 더보기 버튼 클릭 (최대 10번)
+            # 기사 더보기 클릭
             click_more_articles()
 
             # 추가 기사들이 완전히 로드될 때까지 대기

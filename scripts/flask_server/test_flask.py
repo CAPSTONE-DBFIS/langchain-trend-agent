@@ -5,7 +5,7 @@ BASE_URL = "http://127.0.0.1:8080"  # Flask 서버 주소
 
 # 서버 상태 확인 테스트
 def test_home():
-    response = requests.get(f"{BASE_URL}/home")
+    response = requests.get(f"{BASE_URL}/")
     assert response.status_code == 200
     assert response.json() == {"message": "Server is running!"}
 
