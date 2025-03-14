@@ -73,7 +73,10 @@ def parse_data(raw_html, url):
 
     # 게시일자 추출
     date_tag = soup.find('span', class_='media_end_head_info_datestamp_time')
-    date = date_tag.get_text(strip=True) if date_tag else "No date found"
+    date_full = date_tag.get_text(strip=True) if date_tag else "No date found"
+
+    date_parts = date_full.split('.')[0:3]  # ['2025', '03', '11']
+    date = '.'.join(date_parts) if len(date_parts) == 3 else "No date found"
 
     # 기사 내용 추출
     content_tag = soup.find('div', id='newsct_article')

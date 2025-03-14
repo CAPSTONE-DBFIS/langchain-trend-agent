@@ -149,29 +149,6 @@ def delete_article(article_id):
         return jsonify({"error": str(e)}), 500
 
 # 날짜별 상위 10개 단어 빈도 조회
-@app.route("/api/word_frequencies", methods=["GET"])
-def get_word_frequencies():
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute("SELECT date, word_counts FROM word_frequency ORDER BY date DESC;")
-        results = cur.fetchall()
-        cur.close()
-        conn.close()
-
-        word_frequencies = [
-            {"date": row[0], "word_counts": json.loads(row[1])} for row in results
-        ]
-
-        return jsonify(word_frequencies), 200
-
-    except Exception as e:
-        print("❌ get_word_frequencies() 오류:", e)
-        return jsonify({"error": str(e)}), 500
-
-
-# 날짜별 단어 빈도 데이터 업로드
 @app.route("/api/word_frequencies/upload", methods=["POST"])
 def upload_word_frequencies():
     data = request.json  # JSON 데이터 받기
@@ -184,11 +161,12 @@ def upload_word_frequencies():
         cur = conn.cursor()
 
         create_table_query = """
-        CREATE TABLE IF NOT EXISTS word_frequency (
+        CREATE TABLE IF NOT EXISTS word_frequencies (
             id SERIAL PRIMARY KEY,
             date DATE NOT NULL,
-            word_counts JSONB NOT NULL,
-            UNIQUE(date)
+            word TEXT NOT NULL,
+            count INTEGER NOT NULL,
+            UNIQUE(date, word)
         );
         """
         cur.execute(create_table_query)
@@ -196,15 +174,16 @@ def upload_word_frequencies():
 
         for entry in data:
             date = entry["date"]
-            word_counts_json = json.dumps(entry["word_counts"], ensure_ascii=False)
+            word = entry["word"]
+            count = entry["count"]
 
             insert_query = """
-            INSERT INTO word_frequency (date, word_counts)
-            VALUES (%s, %s)
-            ON CONFLICT (date) DO UPDATE
-            SET word_counts = EXCLUDED.word_counts;
+            INSERT INTO word_frequencies (date, word, count)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (date, word) DO UPDATE
+            SET count = EXCLUDED.count;
             """
-            cur.execute(insert_query, (date, word_counts_json))
+            cur.execute(insert_query, (date, word, count))
 
         conn.commit()
         cur.close()
@@ -214,6 +193,7 @@ def upload_word_frequencies():
     except Exception as e:
         print("❌ upload_word_frequencies() 오류:", e)
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(debug=True, port=8080)

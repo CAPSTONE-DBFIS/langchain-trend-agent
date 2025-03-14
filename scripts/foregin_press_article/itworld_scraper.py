@@ -77,8 +77,8 @@ def itworld_article_scraper(urls):
                     time_tag = spans[1]
                     date = time_tag.text.strip()if time_tag else "날짜 없음"
 
-            desc_tag = soup.find('div', class_='core')
-            desc = desc_tag.text.strip() if desc_tag else "요약 없음"
+            desc_tag = soup.find('div', id='remove_no_follow')
+            desc = desc_tag.text.strip() if desc_tag else "콘텐츠 내용이 없음"
 
             articles.append({
                 "url": url,
@@ -123,3 +123,5 @@ if __name__ == "__main__":
         all_articles.extend(articles)
 
     print(all_articles[:2])
+
+    save_to_csv(all_articles, "../../data/raw/itworld_articles.csv")

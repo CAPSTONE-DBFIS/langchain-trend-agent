@@ -31,7 +31,7 @@ start_time = time.time()
 logging.info("main.py 실행 시작")
 
 if __name__ == "__main__":
-    start_date = datetime.strptime("20250311", "%Y%m%d")
+    start_date = datetime.strptime("20250312", "%Y%m%d")
     # 현재 날짜의 전날을 종료 날짜로 설정
     end_date = datetime.today() - timedelta(days=1)
 

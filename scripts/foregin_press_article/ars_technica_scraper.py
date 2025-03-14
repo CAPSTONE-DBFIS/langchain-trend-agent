@@ -36,7 +36,7 @@ def extract_article_details(url, headers):
     # 날짜 파싱 및 "YYYY-MM-DD" 형식으로 변환
     try:
         parsed_date = parser.parse(date_str)
-        formatted_date = parsed_date.strftime("%Y-%m-%d")
+        formatted_date = parsed_date.strftime("%Y.%m.%d")
     except Exception:
         formatted_date = date_str
 

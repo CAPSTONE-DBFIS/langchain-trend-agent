@@ -104,11 +104,12 @@ def scrape_articles_from_page(page):
                 continue
             relative_date = date_tag.get_text(strip=True)
             date = convert_relative_date(relative_date)
+            formatted_date = datetime.strptime(date, "%Y-%m-%d").strftime("%Y.%m.%d")
 
             articles.append({
                 "url": href,
                 "title": title,
-                "date": date,
+                "date": formatted_date,
                 "desc": desc
             })
         except Exception as e:

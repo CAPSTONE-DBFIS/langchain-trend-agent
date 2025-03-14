@@ -1,6 +1,7 @@
 import requests
 import re
 import time
+from datetime import datetime
 import pandas as pd
 import os
 from bs4 import BeautifulSoup
@@ -122,6 +123,8 @@ def techcrunch_article_scraper(urls):
         # 날짜 추출: URL에서 추출
         date = extract_date_from_url(url)
 
+        formatted_date = datetime.strptime(date, "%Y-%m-%d").strftime("%Y.%m.%d")
+
         # 본문(desc) 추출
         desc_div = soup.select_one(
             "div.entry-content.wp-block-post-content.is-layout-constrained.wp-block-post-content-is-layout-constrained")
@@ -133,7 +136,7 @@ def techcrunch_article_scraper(urls):
         articles.append({
             "url": url,
             "title": title,
-            "date": date,
+            "date": formatted_date,
             "desc": desc
         })
 
