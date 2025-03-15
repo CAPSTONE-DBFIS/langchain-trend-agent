@@ -39,7 +39,7 @@ def get_articles():
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, category, media_company, title, date, comment_count, image, url, summary FROM article_data;")
+            "SELECT id, category, media_company, title, date, image, url, summary FROM article_data;")
         articles = cur.fetchall()
         cur.close()
         conn.close()
@@ -51,10 +51,9 @@ def get_articles():
                 "media_company": article[2],
                 "title": article[3],
                 "date": article[4],
-                "comment_count": article[5],
-                "image": article[6],
-                "url": article[7],
-                "summary": article[8],
+                "image": article[5],
+                "url": article[6],
+                "summary": article[7],
             }
             for article in articles
         ]
@@ -73,7 +72,7 @@ def get_articles_html():
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, category, media_company, title, date, comment_count, image, url, summary FROM article_data;")
+            "SELECT id, category, media_company, title, date, image, url, summary FROM article_data;")
         articles = cur.fetchall()
         cur.close()
         conn.close()
@@ -84,13 +83,14 @@ def get_articles_html():
         print("❌ get_articles_html() 오류:", e)
         return jsonify({"error": str(e)}), 500
 
+
 # 기사 데이터 업로드
 @app.route("/upload", methods=["POST"])
 def upload_article():
     data = request.json
 
     # 필수 필드 확인
-    required_fields = ["category", "media_company", "title", "date", "comment_count", "image", "url", "summary"]
+    required_fields = ["category", "media_company", "title", "date", "image", "url", "summary"]
     for field in required_fields:
         if field not in data:
             return jsonify({"error": f"'{field}' 필드가 누락되었습니다."}), 400
@@ -101,8 +101,8 @@ def upload_article():
 
         cur.execute(
             """
-            INSERT INTO article_data (category, media_company, title, date, comment_count, image, url, summary)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO article_data (category, media_company, title, date, image, url, summary)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
             (
@@ -110,7 +110,6 @@ def upload_article():
                 data["media_company"][:255],
                 data["title"],
                 data["date"],
-                int(data["comment_count"]),
                 data["image"][:255],
                 data["url"],
                 data["summary"],
@@ -126,6 +125,7 @@ def upload_article():
     except Exception as e:
         print("❌ upload_article() 오류:", e)
         return jsonify({"error": str(e)}), 500
+
 
 # 특정 기사 삭제 엔드포인트
 @app.route("/delete_article/<int:article_id>", methods=["DELETE"])
@@ -147,6 +147,25 @@ def delete_article(article_id):
     except Exception as e:
         print("❌ delete_article() 오류:", e)
         return jsonify({"error": str(e)}), 500
+
+
+# 단어 빈도 데이터를 HTML로 렌더링
+@app.route("/word_frequencies", methods=["GET"])
+def get_word_frequencies_html():
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT date, word, count FROM word_frequencies ORDER BY date DESC, count DESC;")
+        word_frequencies = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        return render_template("word_frequencies.html", word_frequencies=word_frequencies)
+
+    except Exception as e:
+        print("❌ get_word_frequencies_html() 오류:", e)
+        return jsonify({"error": str(e)}), 500
+
 
 # 날짜별 상위 10개 단어 빈도 조회
 @app.route("/api/word_frequencies/upload", methods=["POST"])
@@ -192,6 +211,64 @@ def upload_word_frequencies():
 
     except Exception as e:
         print("❌ upload_word_frequencies() 오류:", e)
+        return jsonify({"error": str(e)}), 500
+
+
+# 해외 기사 데이터를 HTML로 렌더링
+@app.route("/foreign_articles", methods=["GET"])
+def get_foreign_articles_html():
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id, url, title, date, description FROM foreign_press_articles;")
+        foreign_articles = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        return render_template("foreign_articles.html", foreign_articles=foreign_articles)
+
+    except Exception as e:
+        print("❌ get_foreign_articles_html() 오류:", e)
+        return jsonify({"error": str(e)}), 500
+
+
+# foreign_press_articles 테이블에 기사 데이터 업로드
+@app.route("/api/foreign_articles/upload", methods=["POST"])
+def foreign_upload_article():
+    data = request.json
+
+    # 필수 필드 확인
+    required_fields = ["url", "title", "date", "description"]
+    for field in required_fields:
+        if field not in data:
+            return jsonify({"error": f"'{field}' 필드가 누락되었습니다."}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            INSERT INTO foreign_press_articles (url, title, date, description)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id;
+            """,
+            (
+                data["url"],
+                data["title"],
+                data["date"],
+                data["description"],
+            ),
+        )
+
+        new_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"message": "Article added successfully", "id": new_id}), 201
+
+    except Exception as e:
+        print("❌ upload_article() 오류:", e)
         return jsonify({"error": str(e)}), 500
 
 

@@ -13,7 +13,11 @@ import time
 CATEGORY_URLS = {
     "모바일": "https://news.naver.com/breakingnews/section/105/731",
     "인터넷/SNS": "https://news.naver.com/breakingnews/section/105/226",
+    "통신/뉴미디어": "https://news.naver.com/breakingnews/section/105/227",
+    "IT 일반": "https://news.naver.com/breakingnews/section/105/230",
     "보안/해킹": "https://news.naver.com/breakingnews/section/105/732",
+    "컴퓨터": "https://news.naver.com/breakingnews/section/105/283",
+    "과학/일반": "https://news.naver.com/breakingnews/section/105/228",
 }
 
 # Selenium 설정

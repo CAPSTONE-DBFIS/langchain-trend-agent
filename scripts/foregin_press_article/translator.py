@@ -1,77 +1,88 @@
 import os
-import pandas as pd
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-import torch
+import requests
+from dotenv import load_dotenv
+from data_upload_milvus import connect_milvus, Collection
 
-# 번역 모델 (NLLB-200)
-MODEL_NAME = "facebook/nllb-200-distilled-600M"
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME)
+# 환경 변수 로드
+load_dotenv()
 
-# 번역 대상 언어 설정
-SRC_LANG = "eng_Latn"  # 원본 언어 (영어)
-TGT_LANG = "kor_Hang"  # 번역 언어 (한국어)
+# DeepL API 설정
+DEEPL_API_KEY = os.getenv("DeepL_API_KEY")
+DEEPL_API_URL = "https://api-free.deepl.com/v2/translate"
 
-# 원본 데이터 및 저장 경로 설정
-RAW_DATA_PATH = "../../data/raw/"
-PROCESSED_DATA_PATH = "../../data/processed/"
+# Flask 서버 엔드포인트
+FLASK_SERVER_URL = "http://localhost:8080/api/foreign_articles/upload"
 
-# 번역할 파일 목록
-CSV_FILES = [
-    "nyt_article.csv",
-    "techcrunch_article.csv",
-    "zdnet_article.csv",
-    "ars_technica_article.csv"
-]
+# Milvus 컬렉션 정보
+COLLECTION_NAME = "foreign_article"
+
+# Milvus 연결
+connect_milvus()
 
 
-def translate_text(text):
-    """주어진 영어 텍스트를 한국어로 번역"""
-    if not text.strip():
-        return ""  # 빈 문자열 처리
+# Milvus에서 기사 데이터 가져오기
+def fetch_articles(limit=5):
+    collection = Collection(COLLECTION_NAME)
+    collection.load()
 
-    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
-
-    # 강제 BOS 토큰 ID 설정 (한국어)
-    bos_token_id = tokenizer.convert_tokens_to_ids(TGT_LANG)
-
-    with torch.no_grad():
-        outputs = model.generate(**inputs, forced_bos_token_id=bos_token_id)
-
-    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+    results = collection.query(
+        expr="pk >= 0",
+        output_fields=["url", "title", "date", "desc"],
+        limit=limit
+    )
+    return results
 
 
-def translate_csv(file_path, save_path):
-    """CSV 파일의 'title'과 'desc' 컬럼을 번역하여 기존 데이터에 'title_ko' 및 'desc_ko' 컬럼 추가"""
-    df = pd.read_csv(file_path, encoding="utf-8-sig")
+# DeepL API를 사용해 번역하는 함수
+def translate_text(text, target_lang="KO"):
+    if not text:
+        return ""
 
-    if "title" not in df.columns or "desc" not in df.columns:
-        print(f"⚠️ {file_path}에 'title' 또는 'desc' 컬럼이 없습니다. 건너뜁니다.")
-        return
+    data = {
+        "auth_key": DEEPL_API_KEY,
+        "text": text,
+        "target_lang": target_lang
+    }
 
-    print(f"🔍 {file_path} 번역 중...")
+    response = requests.post(DEEPL_API_URL, data=data)
+    if response.status_code == 200:
+        return response.json()["translations"][0]["text"]
+    else:
+        print(f"DeepL API 호출 실패: {response.status_code}, {response.text}")
+        return None
 
-    # title 컬럼 번역 (새로운 title_ko 컬럼 추가)
-    df["title_ko"] = df["title"].astype(str).apply(translate_text)
 
-    # desc 컬럼 번역 (새로운 desc_ko 컬럼 추가)
-    df["desc_ko"] = df["desc"].astype(str).apply(translate_text)
+# Flask 서버로 번역된 데이터 업로드
+def upload_article(data):
+    response = requests.post(FLASK_SERVER_URL, json=data)
+    if response.status_code == 201:
+        print(f"✅ 성공적으로 업로드됨: {data['title']}")
+    else:
+        print(f"❌ 업로드 실패: {response.status_code}, {response.text}")
 
-    # 번역된 CSV 파일 저장
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    df.to_csv(save_path, index=False, encoding="utf-8-sig")
-    print(f"✅ 번역 완료: {save_path}")
 
-def main():
-    """폴더 내 모든 해외 기사 CSV 파일 번역"""
-    for file in CSV_FILES:
-        raw_file_path = os.path.join(RAW_DATA_PATH, file)
-        translated_file_path = os.path.join(PROCESSED_DATA_PATH, f"translated_{file}")
-
-        if os.path.exists(raw_file_path):
-            translate_csv(raw_file_path, translated_file_path)
-        else:
-            print(f"⚠️ 파일 없음: {raw_file_path}")
-
+# 실행 코드
 if __name__ == "__main__":
-    main()
+    # Milvus에서 기사 데이터 가져오기
+    articles = fetch_articles(limit=5)
+
+    for article in articles:
+        url, title, date, desc = article["url"], article["title"], article["date"], article["desc"]
+
+        print(f"\n🔹 원본 제목: {title}")
+        print(f"🔹 원본 본문: {desc[:200]}...")  # 본문 일부 출력
+
+        translated_title = translate_text(title, "KO")
+        translated_desc = translate_text(desc[:500], "KO")  # DeepL Free API 제한 고려
+
+        print(f"✅ 번역된 제목: {translated_title}")
+        print(f"✅ 번역된 본문: {translated_desc[:200]}...")  # 번역된 본문 일부 출력
+
+        # Flask 서버에 데이터 전송
+        article_data = {
+            "url": url,
+            "title": translated_title,
+            "date": date,
+            "description": translated_desc
+        }
+        upload_article(article_data)
