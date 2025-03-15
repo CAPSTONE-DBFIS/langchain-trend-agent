@@ -49,7 +49,7 @@ def nyt_article_scraper(urls):
             title_tag = soup.find('h1', {'data-testid': 'headline'})
             title = title_tag.text.strip() if title_tag else "제목 없음"
 
-            # Date 추출
+            # Date 추출 (YYYY-MM-DD 형식 유지)
             time_tag = soup.find('time', datetime=True)
             date = time_tag['datetime'][:10] if time_tag else "날짜 없음"  # 날짜만 저장 (YYYY-MM-DD)
 
@@ -61,7 +61,7 @@ def nyt_article_scraper(urls):
             articles.append({
                 "url": url,
                 "title": title,
-                "date": date,
+                "date": date,  # YYYY-MM-DD 형식 유지
                 "desc": desc
             })
         else:

@@ -1,20 +1,19 @@
 import os
 import pandas as pd
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-from collections import Counter
+import requests
+from collections import defaultdict, Counter
 from konlpy.tag import Okt
-
+from datetime import datetime
 
 class SemanticTextClassifier:
-    def __init__(self, input_file, output_dir, stopwords_file='../../data/raw/stopwords.txt', threshold=0.7):
+    def __init__(self, input_file, output_dir, flask_server_url, stopwords_file='../../data/raw/stopwords.txt', threshold=0.7, top_n=10):
         self.input_file = input_file
         self.output_dir = output_dir
         self.threshold = threshold
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
-        self.okt = Okt()  # Initialize Okt
+        self.top_n = top_n
+        self.flask_server_url = flask_server_url
+        self.okt = Okt()
 
-        # Load stopwords from file
         try:
             with open(stopwords_file, 'r', encoding='utf-8') as f:
                 self.stopwords = set(line.strip() for line in f)
@@ -23,58 +22,66 @@ class SemanticTextClassifier:
             self.stopwords = set()
 
     def _remove_josa_with_okt(self, text):
-        """Use Okt to remove particles (조사) and extract meaningful words."""
         tokens = self.okt.pos(text, norm=True, stem=True)
         meaningful_words = [word for word, pos in tokens if pos not in ['Josa', 'Punctuation'] and word not in self.stopwords]
         return meaningful_words
 
-    def _calculate_word_frequencies(self, texts):
-        """Calculates word frequencies from the given texts."""
-        word_counter = Counter()
-        for text in texts:
-            # Preprocess text using Okt for tokenization and stopword removal
-            words = self._remove_josa_with_okt(text)
-            word_counter.update(words)
-        return word_counter
+    def _convert_date_format(self, date_str):
+        try:
+            date_obj = datetime.strptime(date_str.strip()[:10], "%Y.%m.%d")
+            return date_obj.strftime("%Y-%m-%d")
+        except ValueError:
+            print(f"❌ 잘못된 날짜 형식: {date_str}")
+            return None
 
-    def process_and_save(self):
-        """Processes the input file and saves results to the output directory."""
-        # Read input CSV
+    def _calculate_word_frequencies(self, df):
+        date_word_counts = defaultdict(Counter)
+
+        for _, row in df.iterrows():
+            raw_date = row['date']
+            date = self._convert_date_format(raw_date)
+            if date is None:
+                continue
+
+            title = row['title']
+            words = self._remove_josa_with_okt(title)
+            date_word_counts[date].update(words)
+
+        result_list = []
+        for date, word_counts in date_word_counts.items():
+            for word, count in word_counts.most_common(self.top_n):
+                result_list.append({"date": date, "word": word, "count": count})
+
+        return result_list
+
+    def process_and_send(self):
         try:
             df = pd.read_csv(self.input_file, encoding='utf-8-sig')
         except FileNotFoundError:
             print(f"파일을 찾을 수 없습니다: {self.input_file}")
             return
 
-        if 'title' not in df.columns:
-            print("CSV 파일에 'title' 열이 없습니다.")
+        if 'title' not in df.columns or 'date' not in df.columns:
+            print("CSV 파일에 'title' 또는 'date' 열이 없습니다.")
             return
 
-        # 제목 데이터 추출
-        titles = df['title'].dropna().tolist()
+        word_frequencies = self._calculate_word_frequencies(df)
+        self._send_to_flask_server(word_frequencies)
 
-        # Calculate word frequencies for titles
-        title_word_frequencies = self._calculate_word_frequencies(titles)
+    def _send_to_flask_server(self, word_frequencies):
+        response = requests.post(f"{self.flask_server_url}/api/word_frequencies/upload", json=word_frequencies)
 
-        # Filter words with frequency <= 0
-        filtered_word_frequencies = {word: count for word, count in title_word_frequencies.items() if count > 0}
+        if response.status_code == 201:
+            print("✅ 데이터가 Flask 서버로 성공적으로 전송되었습니다.")
+        else:
+            print(f"❌ 전송 실패: {response.status_code}, {response.json()}")
 
-        # Save filtered word frequencies
-        os.makedirs(self.output_dir, exist_ok=True)
-        word_freq_file = os.path.join(self.output_dir, 'word_frequencies.csv')
-        word_freq_df = pd.DataFrame(filtered_word_frequencies.items(), columns=['Word', 'Count']).sort_values(by='Count',
-                                                                                                               ascending=False)
-        word_freq_df.to_csv(word_freq_file, index=False, encoding='utf-8-sig')
-
-        print(f"단어 빈도 데이터가 {word_freq_file}에 저장되었습니다.")
-
-
-# Example usage
 if __name__ == "__main__":
-
     classifier = SemanticTextClassifier(
         input_file='../../data/raw/article_data.csv',
         output_dir='../../data/processed/',
-        threshold=0.7
+        flask_server_url="http://localhost:8080",
+        threshold=0.7,
+        top_n=50
     )
-    classifier.process_and_save()
+    classifier.process_and_send()

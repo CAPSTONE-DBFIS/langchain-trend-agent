@@ -125,9 +125,9 @@ def save_to_csv(posts, filepath):
 
 def remove_html_tags(text):
     """HTML 태그를 제거하는 함수"""
-    # <br>을 줄바꿈 문자로 바꾸고, 나머지 HTML 태그 제거
-    text = re.sub(r'<br\s*/?>', '\n', text)  # <br>을 줄바꿈 문자로 변환
-    text = re.sub(r'</?[^>]+>', '', text)  # 나머지 HTML 태그 제거
+    
+    text = re.sub(r'<br\s*/?>', '\n', text)
+    text = re.sub(r'</?[^>]+>', '', text)
     return text
 
 if __name__ == "__main__":
