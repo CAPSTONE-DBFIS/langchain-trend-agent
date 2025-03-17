@@ -178,3 +178,12 @@ data/texts/reddit_0.txt
 data/processed/word_frequencies.csv
 !/notebooks/analysis.ipynb
 notebooks/analysis.ipynb
+=======
+
+# macOS specific files
+.DS_Store
+.idea/
+
+# Ignore Python cache files
+__pycache__/
+*.pycdata/raw/article_data.csv
