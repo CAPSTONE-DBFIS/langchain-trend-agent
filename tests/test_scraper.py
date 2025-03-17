@@ -1,3 +1,6 @@
+# tests/test_scraper.py
+
+from scripts.domestic_article.scraper import scrape_data
 import pytest
 from scripts.scraper import scrape_data_by_category
 

@@ -1,3 +1,6 @@
+# tests/test_parser.py
+
+from scripts.domestic_article.parser import parse_data
 from scripts.parser import parse_data
 import pytest
 
