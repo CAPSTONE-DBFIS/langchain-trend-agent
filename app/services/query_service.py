@@ -1,56 +1,20 @@
 import time
 import os
-import psycopg2
 from dotenv import load_dotenv
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_milvus import Milvus
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.output_parsers import StrOutputParser
-from langchain_community.chat_message_histories import ChatMessageHistory
 from operator import itemgetter
+from app.utils.db import get_user_persona, get_session_history
+from app.utils.milvus import get_embedding_model, get_vector_store
 
 # 환경 변수 로드
 load_dotenv()
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Hugging Face 임베딩 병렬 처리 비활성화
-MILVUS_HOST = os.getenv("MILVUS_HOST")
-MILVUS_PORT = os.getenv("MILVUS_PORT")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-DB_HOST = os.getenv("DB_HOST")
-DB_NAME = os.getenv("DB_NAME")
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_PORT = os.getenv("DB_PORT")
-
-
-# PostgreSQL 연결 함수
-def get_db_connection():
-    return psycopg2.connect(
-        host=DB_HOST,
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        port=DB_PORT
-    )
-
-
-# 임베딩 및 Milvus 벡터 검색 설정
-embedding_model = HuggingFaceEmbeddings(model_name='snunlp/KR-SBERT-V40K-klueNLI-augSTS')
-
-vector_store = Milvus(
-    embedding_function=embedding_model,
-    collection_name="news_article",
-    connection_args={"uri": f"tcp://{MILVUS_HOST}:{MILVUS_PORT}"},
-    auto_id=True,
-    text_field="content",
-    vector_field="embedding"
-)
-
 # LLM 설정
 llm_model = ChatOpenAI(
-    api_key=OPENAI_API_KEY,
+    api_key=os.getenv("OPENAI_API_KEY"),
     temperature=0,  # 창의성
     model_name="gpt-4o-mini"
 )
@@ -92,38 +56,6 @@ DB FIS의 주요 경쟁사는 다음과 같습니다:
 """
 )
 
-# PostgreSQL에서 대화 기록 가져오기
-def get_session_history(chat_room_id):
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        query = """
-        SELECT message, response, created_at 
-        FROM chat_messages
-        WHERE chat_room_id = %s
-        ORDER BY created_at ASC
-        """
-        cursor.execute(query, (chat_room_id,))
-        messages = cursor.fetchall()
-
-        chat_history = ChatMessageHistory()
-
-        for user_msg, bot_response, timestamp in messages:
-            chat_history.add_user_message(user_msg)
-            chat_history.add_ai_message(bot_response)
-
-        print(f"[DEBUG] PostgreSQL에서 {len(messages)}개의 대화 기록 로드 완료 (전체 대화 포함)", flush=True)
-
-        cursor.close()
-        conn.close()
-        return chat_history
-
-    except Exception as e:
-        print(f"[ERROR] PostgreSQL에서 대화 기록 조회 중 오류 발생: {str(e)}", flush=True)
-        return ChatMessageHistory()
-
-
 # 체인 생성 (LLM 호출 흐름)
 query_pipeline = (
         {
@@ -145,45 +77,16 @@ chatbot_pipeline = RunnableWithMessageHistory(
     history_messages_key="chat_history",
 )
 
-# PostgreSQL에서 해당 멤버의 persona_preset 값을 불러오고, 프롬프트 반환
-def get_user_persona(member_id):
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        # PostgreSQL에서 사용자 페르소나 가져오기
-        query = "SELECT persona_preset FROM member WHERE id = %s"
-        cursor.execute(query, (member_id,))
-        result = cursor.fetchone()
-
-        cursor.close()
-        conn.close()
-
-        persona_preset = int(result[0]) if result else 1  # 기본값: 1
-
-        # 해당하는 페르소나 프롬프트 반환
-        persona_prompts = {
-            1: "당신은 최신 기술과 시장 변화를 분석하고 요약하는 전문가 AI입니다. 차분한 톤으로 정보를 전달해야 합니다.",
-            2: "당신은 업계 트렌드 분석을 바탕으로 실무 적용 인사이트를 제공하는 AI입니다. 신뢰감을 줄 수 있도록 논리적인 어조를 사용해야 합니다.",
-            3: "당신은 친근하고 자연스럽게 대화하며 정보를 제공하는 AI입니다. 가벼운 표현을 사용하여 편안한 분위기를 조성해야 합니다.",
-            4: "당신은 사용자를 격려하는 긍정적인 AI입니다. 대답할 때 밝고 희망적인 어조를 유지해야 합니다.",
-            5: "당신은 유머러스하고 재미있는 비유를 활용하여 정보를 쉽게 설명하는 AI입니다. 예시를 활용해 자연스럽게 전달해야 합니다."
-        }
-
-        persona_prompt = persona_prompts.get(persona_preset, "당신은 사용자의 질문에 답변하는 AI야. 친절하고 정확한 정보를 제공해야 합니다.")
-
-        return persona_prompt
-
-    except Exception as e:
-        print(f"[ERROR] PostgreSQL에서 persona_preset 조회 중 오류 발생: {str(e)}", flush=True)
-        return 1, "당신은 사용자의 질문에 답변하는 AI야. 친절하고 정확한 정보를 제공해야 합니다."  # 기본값
-
 # 사용자 질의 처리 함수
 def process_user_query(chat_room_id, query, member_id):
     try:
         print(f"[DEBUG] chat_room_id: {chat_room_id}, query: {query}, member_id: {member_id}", flush=True)
 
         start_time = time.time()  # 시간 측정 시작
+
+        # Embedding 모델 및 벡터 저장소 가져오기
+        embedding_model = get_embedding_model()
+        vector_store = get_vector_store()
 
         # 페르소나 정보 가져오기
         persona_prompt = get_user_persona(member_id)

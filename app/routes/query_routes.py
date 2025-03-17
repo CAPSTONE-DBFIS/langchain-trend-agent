@@ -16,7 +16,7 @@ def handle_query():
             return jsonify({"error": "쿼리가 필요합니다."}), 400
 
         query = data['query'].strip()
-        session_id = data.get('session_id', 'default_session')  # 세션 ID 기본값 설정
+        chatroom_id = data.get('chat_room_id')
         member_id = data.get('member_id')  # member_id 추가
 
         if not query:
@@ -26,7 +26,7 @@ def handle_query():
             return jsonify({"error": "member_id가 필요합니다."}), 400
 
         # 쿼리 처리 (member_id 포함)
-        results = process_user_query(session_id, query, member_id)
+        results = process_user_query(chatroom_id, query, member_id)
 
         # 응답을 UTF-8 인코딩
         response = jsonify({"results": results})
