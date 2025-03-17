@@ -42,14 +42,13 @@ def test_upload_and_delete_article():
     assert delete_json["id"] == article_id  # 삭제된 ID 확인
 
 # 필수 필드 누락 테스트
-@pytest.mark.parametrize("missing_field", ["category", "media_company", "title", "date", "comment_count", "image", "url", "summary"])
+@pytest.mark.parametrize("missing_field", ["category", "media_company", "title", "date", "image", "url", "summary"])
 def test_upload_article_missing_fields(missing_field):
     article_data = {
         "category": "IT",
         "media_company": "테크미디어",
         "title": "AI 기술의 발전",
         "date": "2025-03-09",
-        "comment_count": 10,
         "image": "https://example.com/image.jpg",
         "url": "https://example.com/article",
         "summary": "AI 기술이 빠르게 발전하고 있다."

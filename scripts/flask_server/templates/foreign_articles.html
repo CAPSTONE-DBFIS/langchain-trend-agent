@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>해외 뉴스 기사</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid black; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+
+    <h1>🌍 해외 뉴스 기사 목록</h1>
+    <table>
+        <tr>
+            <th>ID</th>
+            <th>제목</th>
+            <th>날짜</th>
+            <th>설명</th>
+            <th>링크</th>
+        </tr>
+        {% for article in foreign_articles %}
+        <tr>
+            <td>{{ article[0] }}</td>
+            <td>{{ article[2] }}</td>
+            <td>{{ article[3] }}</td>
+            <td>{{ article[4] }}</td>
+            <td><a href="{{ article[1] }}" target="_blank">기사 보기</a></td>
+        </tr>
+        {% endfor %}
+    </table>
+
+</body>
+</html>
