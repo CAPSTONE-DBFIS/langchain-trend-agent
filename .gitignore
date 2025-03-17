@@ -187,3 +187,4 @@ notebooks/analysis.ipynb
 # Ignore Python cache files
 __pycache__/
 *.pycdata/raw/article_data.csv
+data/raw/article_data.csv
