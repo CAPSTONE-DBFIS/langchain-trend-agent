@@ -40,7 +40,7 @@ def techcrunch_url_scraper():
     }
     links = []
 
-    # 1페이지부터 4페이지까지 순회
+    # 1 페이지부터 지정한 페이지까지 순회
     for page in range(1, 3):
         if page == 1:
             url = base_url
@@ -104,6 +104,7 @@ def techcrunch_article_scraper(urls):
         )
     }
     articles = []
+    media_company = "TechCrunch"
 
     for url in urls:
         print(f"기사 스크래핑 중: {url}")
@@ -129,15 +130,16 @@ def techcrunch_article_scraper(urls):
         desc_div = soup.select_one(
             "div.entry-content.wp-block-post-content.is-layout-constrained.wp-block-post-content-is-layout-constrained")
         if desc_div:
-            desc = clean_html_text(desc_div)  # 본문을 깨지지 않게 정리
+            content = clean_html_text(desc_div)  # 본문을 깨지지 않게 정리
         else:
-            desc = "본문을 찾을 수 없음"
+            content = "본문을 찾을 수 없음"
 
         articles.append({
-            "url": url,
-            "title": title,
+            "media_company": media_company,
             "date": formatted_date,
-            "desc": desc
+            "title": title,
+            "content": content,
+            "url": url,
         })
 
     return articles
@@ -157,8 +159,8 @@ def save_to_csv(articles, filepath):
         (df['date'] != "날짜를 찾을 수 없음") &
         (df['date'] != "날짜를 파싱할 수 없음") &
         (df['date'] != "N/A") &
-        (df['desc'] != "본문을 찾을 수 없음") &
-        (df['desc'] != "N/A")
+        (df['content'] != "본문을 찾을 수 없음") &
+        (df['content'] != "N/A")
         ]
 
     if valid_df.empty:
@@ -177,7 +179,7 @@ def save_to_csv(articles, filepath):
     valid_df = df[
         (df['title'] != "제목을 찾을 수 없음") &
         (df['date'] != "날짜를 찾을 수 없음") &
-        (df['desc'] != "본문을 찾을 수 없음")
+        (df['content'] != "본문을 찾을 수 없음")
         ]
 
     if valid_df.empty:
