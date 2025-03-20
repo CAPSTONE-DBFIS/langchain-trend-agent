@@ -28,8 +28,8 @@ def connect_milvus():
 # 컬렉션 스키마 정의
 fields = [
     FieldSchema(name="pk", dtype=DataType.INT64, is_primary=True, auto_id=True),  # 기본 키 (자동 증가)
-    FieldSchema(name="title", dtype=DataType.VARCHAR, max_length=255),  # 기사 URL
-    FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=65535),  # 기사 제목
+    FieldSchema(name="title", dtype=DataType.VARCHAR, max_length=255),  # 기사 제목
+    FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=65535),  # 기사 내용
     FieldSchema(name="date", dtype=DataType.VARCHAR, max_length=255),  # 기사 날짜
     FieldSchema(name="media_company", dtype=DataType.VARCHAR, max_length=255),  # 기사 본문
     FieldSchema(name="url", dtype=DataType.VARCHAR, max_length=255),  # 기사 URL
