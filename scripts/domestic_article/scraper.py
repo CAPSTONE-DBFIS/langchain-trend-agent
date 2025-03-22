@@ -27,7 +27,7 @@ chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
 chrome_options.add_argument("--blink-settings=imagesEnabled=false")
 
-service = Service(executable_path='../../lib/chromedriver-win64/chromedriver.exe')
+service = Service(executable_path="/opt/homebrew/bin/chromedriver") #Service(executable_path='../../lib/chromedriver-win64/chromedriver.exe')
 driver = webdriver.Chrome(service=service, options=chrome_options)
 
 
