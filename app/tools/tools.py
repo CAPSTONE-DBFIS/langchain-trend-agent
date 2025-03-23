@@ -1,8 +1,7 @@
 import os
+
 from dotenv import load_dotenv
 import time
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_milvus import Milvus
 from datetime import datetime, timedelta
 import requests
 import re
@@ -13,6 +12,7 @@ from googleapiclient.discovery import build
 from requests.auth import HTTPBasicAuth
 from langchain.prompts import PromptTemplate
 from langchain.chat_models import ChatOpenAI
+from langchain.chains.llm import LLMChain
 from langchain_community.tools import WikipediaQueryRun
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import WikipediaAPIWrapper
@@ -20,6 +20,13 @@ from langchain.tools import tool
 from pytrends.request import TrendReq
 from typing import Dict, Union, List
 from app.utils.milvus import get_embedding_model, get_vector_store
+from app.utils.db import get_db_connection
+import matplotlib
+matplotlib.use('Agg') # 백엔드에서 작업
+import matplotlib.pyplot as plt
+from uuid import uuid4
+from docx import Document
+from docx.shared import Inches
 
 load_dotenv()
 
@@ -379,7 +386,7 @@ def translation_tool(asking: str) -> str:
 
     try:
         prompt = PromptTemplate.from_template("You are a translator. Please give me the translation. {asking}")
-        runnable = prompt | ChatOpenAI(temperature=0, model="gpt-4")
+        runnable = prompt | ChatOpenAI(temperature=0, model="gpt-4o-mini")
         thinking = runnable.invoke({"asking": asking})
 
         return f"Thinking : {thinking}"
@@ -475,3 +482,190 @@ def google_trending_tool(query: str, startDate: str = None, endDate: str = None)
 
     except Exception as e:
         return {"error": f"Error retrieving Google Trends data: {str(e)}"}
+
+@tool
+def generate_trend_report_tool(search_date: str = None) -> str:
+    """
+        db에 저장된 날짜별 키워드를 기반으로 Milvus에서 관련 뉴스를 검색하고,
+        GPT를 통해 종합적인 트렌드 분석 보고서를 생성합니다.
+
+        Args:
+            date (str, optional): 보고서를 생성할 날짜 (예: '2025-03-12').
+                                  기본값은 오늘 날짜.
+
+        Returns:
+            str: 트렌드 인사이트 보고서가 저장된 amazon S3 presigned url
+        """
+
+    if search_date is None:
+        search_date = datetime.today().strftime('%Y-%m-%d')
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT word, count FROM word_frequencies
+            WHERE date = %s
+            ORDER BY count DESC
+            LIMIT 10
+        """, (search_date,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return f"[DB 연결 실패] {str(e)}"
+
+    if not rows:
+        return f"[데이터 없음] {search_date} 날짜에 해당하는 키워드가 없습니다."
+
+    keywords = [row[0] for row in rows]
+    counts = [row[1] for row in rows]
+    keyword_summary = "\n".join([f"- {w}: {c}회" for w, c in rows])
+
+    try:
+        embedding_model = get_embedding_model()
+        vector_store = get_vector_store()
+    except Exception as e:
+        return f"[Milvus 연결 실패] {str(e)}"
+
+    combined_contents = ""
+    for kw in keywords:
+        try:
+            query_embedding = embedding_model.embed_query(kw)
+            results = vector_store.similarity_search_with_score_by_vector(
+                query_embedding,
+                k=3,
+                filter={"date": {"$contains": search_date}}
+            )
+            for doc, score in results:
+                title = doc.metadata.get("title", "")
+                content = doc.page_content.strip()
+                date = doc.metadata.get("date", "null")
+                media = doc.metadata.get("media_company", "null")
+                url = doc.metadata.get("url", "null")
+                if content and search_date in date:
+                    combined_contents += f"\n[키워드: {kw}] | 기사 제목: {title} | 기사 날짜: {date} | 언론사: {media} | 링크: {url}\n{content}\n"
+        except Exception as e:
+            combined_contents += f"\n['{kw}' 검색 실패] {str(e)}\n"
+
+    if not combined_contents.strip():
+        return f"[뉴스 없음] {search_date} 기준 키워드로 검색된 뉴스가 없습니다."
+
+    # GPT 리포트 생성
+    prompt = PromptTemplate.from_template("""
+    너는 기업 리서치 기관의 보고서를 작성하는 전문 AI야.
+
+    아래의 키워드 출현 빈도 및 관련 기사 내용을 기반으로,
+    [개요 - 본론 - 결론] 형식을 따르는 공식적인 보고서를 작성해줘.
+
+    ❗ 마크다운이나 기호 없이, 일반 문단 형식으로 작성해줘.  
+    ❗ 각 섹션은 '개요', '본론', '결론' 제목으로 구분해줘.
+    ❗ 본론에서 키워드 빈도수를 언급하고, 해당 키워드가 언급된 기사 요약은 통합적으로 정리하되, 어떤 흐름이 있었는지 중심으로 작성해줘.
+
+    {date} 기준 IT 키워드 트렌드:
+
+    [키워드 요약]
+    {keywords}
+
+    [관련 뉴스 기사 요약]
+    {articles}
+    """)
+
+    chain = LLMChain(
+        llm=ChatOpenAI(model="gpt-4o-mini", temperature=0),
+        prompt=prompt
+    )
+
+    try:
+        result = chain.invoke({
+            "date": search_date,
+            "keywords": keyword_summary,
+            "articles": combined_contents
+        })
+        gpt_text = result["text"]
+
+        # 시각화 + Word 저장
+        chart_path = generate_keyword_bar_chart(keywords, counts, search_date)
+        filename = f"TRENDB_daily_report_{search_date}_{uuid4().hex[:8]}.docx"
+        file_path = save_report_as_docx(gpt_text, filename, image_path=chart_path)
+
+        # S3 업로드
+        presigned_url = upload_report_to_spring(file_path)
+        return f"보고서 생성 완료!\n📥 [다운로드 링크]({presigned_url}) (7일간 유효)"
+
+    except Exception as e:
+        return f"[GPT 처리 실패] {str(e)}"
+
+
+def generate_keyword_bar_chart(keywords: List[str], counts: List[int], search_date: str) -> str:
+    plt.rcParams['font.family'] = 'AppleGothic'
+    plt.rcParams['axes.unicode_minus'] = False
+
+    plt.figure(figsize=(8, 5))
+    bars = plt.bar(keywords, counts, color='skyblue')
+    plt.title(f"{search_date} 네이버뉴스 키워드 빈도수", fontsize=14)
+    plt.xlabel("키워드")
+    plt.ylabel("빈도수")
+
+    for bar in bars:
+        yval = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2, yval + 0.2, int(yval), ha='center', va='bottom')
+    os.makedirs("reports", exist_ok=True)
+    filename = f"reports/keyword_chart_{search_date}_{uuid4().hex[:6]}.png"
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
+    return filename
+
+
+def save_report_as_docx(content: str, filename: str, image_path: str = None) -> str:
+    doc = Document()
+
+    lines = content.split("\n")
+    current_section = None
+    added_chart = False
+
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line:
+            continue
+
+        if line.startswith("개요"):
+            doc.add_heading("개요", level=1)
+            current_section = "개요"
+
+        elif line.startswith("본론"):
+            doc.add_heading("본론", level=1)
+            current_section = "본론"
+
+            # 본론 시작 직후 그래프 삽입
+            if image_path and os.path.exists(image_path):
+                doc.add_picture(image_path, width=Inches(5.5))
+                doc.add_paragraph("")  # 그래프와 본문 사이 여백
+
+            added_chart = True
+
+        elif line.startswith("결론"):
+            doc.add_heading("결론", level=1)
+            current_section = "결론"
+
+        else:
+            doc.add_paragraph(line)
+
+    os.makedirs("reports", exist_ok=True)
+    full_path = f"reports/{filename}"
+    doc.save(full_path)
+    return full_path
+
+
+def upload_report_to_spring(file_path: str):
+    url = "http://localhost:8080/api/public-reports/upload"
+    with open(file_path, "rb") as f:
+        files = {
+            "file": (os.path.basename(file_path), f, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        }
+        response = requests.post(url, files=files)
+        if response.status_code == 200:
+            return response.json()["url"]
+        else:
+            raise Exception(f"Spring 업로드 실패: {response.status_code} {response.text}")

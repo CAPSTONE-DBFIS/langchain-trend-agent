@@ -1,9 +1,7 @@
 import os
 import pandas as pd
-import requests
 from collections import defaultdict, Counter
 from konlpy.tag import Okt
-from datetime import datetime
 import psycopg2
 
 class SemanticTextClassifier:
@@ -62,14 +60,6 @@ class SemanticTextClassifier:
         word_frequencies = self._calculate_word_frequencies(df)
         # self._send_to_flask_server(word_frequencies)
         self._save_to_database(word_frequencies)
-
-    def _send_to_flask_server(self, word_frequencies):
-        response = requests.post(f"{self.flask_server_url}/api/word_frequencies/upload", json=word_frequencies)
-
-        if response.status_code == 201:
-            print("✅ 데이터가 Flask 서버로 성공적으로 전송되었습니다.")
-        else:
-            print(f"❌ 전송 실패: {response.status_code}, {response.json()}")
 
     def _save_to_database(self, word_frequencies):
         try:
