@@ -18,7 +18,7 @@ MILVUS_HOST = os.getenv("MILVUS_HOST")
 MILVUS_PORT = os.getenv("MILVUS_PORT")
 URI = f"tcp://{MILVUS_HOST}:{MILVUS_PORT}"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ARTICLE_DATA_PATH = os.path.join(BASE_DIR, '..', 'data', 'raw', 'article_data.csv')
+ARTICLE_DATA_PATH = os.path.join(BASE_DIR, '../..', 'data', 'raw', 'article_data.csv')
 
 
 # Milvus 연결 함수
