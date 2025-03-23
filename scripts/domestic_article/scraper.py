@@ -8,6 +8,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from datetime import datetime, timedelta
 import time
+from selenium.common.exceptions import TimeoutException
 
 # 모든 카테고리의 URL 목록
 CATEGORY_URLS = {
@@ -63,11 +64,21 @@ def scrape_articles_by_date(start_date, end_date):
             # 기사 더보기 클릭
             click_more_articles()
 
-            # 추가 기사들이 완전히 로드될 때까지 대기
-            WebDriverWait(driver, 5).until(
-                EC.presence_of_all_elements_located((By.CLASS_NAME, "section_article"))
-            )
-            time.sleep(3)  # 추가 기사들이 로드될 시간을 추가로 확보
+            # # 추가 기사들이 완전히 로드될 때까지 대기
+            # WebDriverWait(driver, 10).until(
+            #     EC.presence_of_all_elements_located((By.CLASS_NAME, "section_article"))
+            # )
+            # time.sleep(3)  # 추가 기사들이 로드될 시간을 추가로 확보
+
+            try:
+                # 추가 기사들이 완전히 로드될 때까지 대기
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_all_elements_located((By.CLASS_NAME, "section_article"))
+                )
+            except TimeoutException:
+                print(f"❌ {category_name} 카테고리에서 요소를 찾지 못했습니다. 넘어갑니다.")
+                continue  # 또는 pass
+            time.sleep(3) # 추가 기사들이 로드될 시간을 추가로 확보
 
             # **동적으로 로딩된 HTML을 가져와서 BeautifulSoup으로 파싱**
             soup = BeautifulSoup(driver.page_source, "html.parser")
