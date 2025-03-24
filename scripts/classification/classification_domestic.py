@@ -37,19 +37,24 @@ class SemanticTextClassifier:
 
         for _, row in df.iterrows():
             date = row['date']
-            if not isinstance(date, str) or len(date) < 10:
+            if not isinstance(date, str) or len(date) != 10:
                 print(f"날짜 형식 오류: {date}")
                 continue
 
             title = row['title']
             words = self._remove_josa_with_okt(title)
+            # 디버깅
+            print(f"날짜: {date}, 단어: {words}")
             date_word_counts[date].update(words)
 
         result_list = []
         for date, word_counts in date_word_counts.items():
             for word, count in word_counts.most_common(self.top_n):
                 result_list.append({"date": date, "word": word, "count": count})
-
+        # 디버깅
+        print("최종 단어 빈도 결과: ")
+        for item in result_list:
+            print(item)
         return result_list
 
     def process_and_send(self):
