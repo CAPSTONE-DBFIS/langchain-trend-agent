@@ -214,6 +214,42 @@ def upload_word_frequencies():
         return jsonify({"error": str(e)}), 500
 
 
+# 해외 기사 단어 빈도 데이터를 저장하는 엔드포인트 (테이블: foreign_keyword_extraction)
+@app.route("/api/foreign_word_frequencies/upload", methods=["POST"])
+def upload_foreign_keyword_extraction():
+    data = request.json  # JSON 데이터 받기
+
+    if not isinstance(data, list):
+        return jsonify({"error": "데이터 형식이 잘못되었습니다. 리스트 형태여야 합니다."}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # 이미 생성된 테이블 foreign_keyword_extraction 에 데이터를 삽입
+        for entry in data:
+            date = entry["date"]
+            word = entry["word"]
+            count = entry["count"]
+
+            insert_query = """
+            INSERT INTO foreign_keyword_extraction (date, word, count)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (date, word) DO UPDATE
+            SET count = EXCLUDED.count;
+            """
+            cur.execute(insert_query, (date, word, count))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"message": "외국 기사 단어 빈도 데이터가 저장되었습니다."}), 201
+
+    except Exception as e:
+        print("❌ upload_foreign_keyword_extraction() 오류:", e)
+        return jsonify({"error": str(e)}), 500
+
+
 # 해외 기사 데이터를 HTML로 렌더링
 @app.route("/foreign_articles", methods=["GET"])
 def get_foreign_articles_html():
@@ -232,13 +268,13 @@ def get_foreign_articles_html():
         return jsonify({"error": str(e)}), 500
 
 
-# foreign_press_articles 테이블에 기사 데이터 업로드
+# foreign_articles 테이블에 기사 데이터 업로드
 @app.route("/api/foreign_articles/upload", methods=["POST"])
 def foreign_upload_article():
     data = request.json
 
     # 필수 필드 확인
-    required_fields = ["url", "title", "date", "description"]
+    required_fields = ["url", "title", "date", "content", "media_company"]
     for field in required_fields:
         if field not in data:
             return jsonify({"error": f"'{field}' 필드가 누락되었습니다."}), 400
@@ -249,15 +285,16 @@ def foreign_upload_article():
 
         cur.execute(
             """
-            INSERT INTO foreign_press_articles (url, title, date, description)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO foreign_articles (url, title, date, content, media_company)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id;
             """,
             (
                 data["url"],
                 data["title"],
                 data["date"],
-                data["description"],
+                data["content"],
+                data["media_company"],
             ),
         )
 
