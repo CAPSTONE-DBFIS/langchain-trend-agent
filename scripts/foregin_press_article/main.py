@@ -2,14 +2,15 @@ import os
 import datetime
 import pandas as pd
 import requests
-from ars_technica_scraper import scrape_arstechnica_gadgets
-from nyt_scraper import nyt_url_scraper, nyt_article_scraper
-from techcrunch_scraper import techcrunch_url_scraper, techcrunch_article_scraper
-from zdnet_scraper import scrape_articles_from_page
-from itworld_scraper import itworld_scraper, itworld_article_scraper  # IT World 추가
+from scraper_ars_technica import scrape_arstechnica_gadgets
+from scraper_nyt import nyt_url_scraper, nyt_article_scraper
+from scraper_techcrunch import techcrunch_url_scraper, techcrunch_article_scraper
+from scraper_zdnet import scrape_articles_from_page
+from scraper_itworld import itworld_scraper, itworld_article_scraper  # IT World 추가
 
 LAST_RUN_FILE = "last_run.txt"
 FLASK_SERVER_URL = "http://localhost:8080/upload"
+
 
 def get_last_run_date():
     if os.path.exists(LAST_RUN_FILE):
@@ -17,9 +18,11 @@ def get_last_run_date():
             return datetime.datetime.strptime(f.read().strip(), "%Y-%m-%d")
     return datetime.datetime(2000, 1, 1)
 
+
 def update_last_run_date():
     with open(LAST_RUN_FILE, "w") as f:
         f.write(datetime.datetime.now().strftime("%Y-%m-%d"))
+
 
 def filter_articles_by_date(articles, last_run_date):
     filtered_articles = []
@@ -31,6 +34,7 @@ def filter_articles_by_date(articles, last_run_date):
         except ValueError:
             print(f"⚠️ 날짜 형식 오류: {article['date']} (URL: {article['url']})")
     return filtered_articles
+
 
 def send_to_flask_server(articles, is_foreign=False):
     if not articles:
@@ -45,6 +49,7 @@ def send_to_flask_server(articles, is_foreign=False):
             print(f"❌ 서버 응답 실패: {response.status_code} - {response.text}")
     except requests.exceptions.RequestException as e:
         print(f"❌ 서버 요청 중 오류 발생: {e}")
+
 
 def main():
     last_run_date = get_last_run_date()
@@ -91,6 +96,7 @@ def main():
 
     update_last_run_date()
     print("\n✅ 모든 크롤링 및 데이터 전송이 완료되었습니다!")
+
 
 if __name__ == "__main__":
     main()

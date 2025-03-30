@@ -22,7 +22,13 @@ class SemanticTextClassifier:
 
     def _remove_josa_with_okt(self, text):
         tokens = self.okt.pos(text, norm=True, stem=True)
-        meaningful_words = [word for word, pos in tokens if pos not in ['Josa', 'Punctuation'] and word not in self.stopwords]
+        # 불용어와 조사를 제거하고, 길이가 1인 단어도 제외
+        meaningful_words = [
+            word for word, pos in tokens
+            if pos not in ['Josa', 'Punctuation']
+            and word not in self.stopwords
+            and len(word) > 1
+        ]
         return meaningful_words
 
 

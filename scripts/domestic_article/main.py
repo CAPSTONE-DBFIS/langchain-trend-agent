@@ -1,12 +1,12 @@
+import scripts.rag.rag as rag
 from scraper import scrape_articles_by_date
 from parser import parse_data, close_driver
-from classification import SemanticTextClassifier
+import scripts.classification.classification_domestic as classification
 from datetime import datetime, timedelta
 import logging
 import pandas as pd
 import time
 import os
-from rag import *
 
 # 로그 디렉토리 설정
 LOG_DIR = "../../logs"
@@ -17,7 +17,6 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 # 데이터 저장 경로 설정
 raw_save_path = "../../data/raw/article_data.csv"
-keyword_save_path = "../../data/raw/keword_data.csv"
 
 # 로그 설정
 logging.basicConfig(
@@ -32,10 +31,9 @@ start_time = time.time()
 logging.info("main.py 실행 시작")
 
 if __name__ == "__main__":
-    start_date = datetime.strptime("20250322", "%Y%m%d")
+    start_date = datetime.strptime("20250329", "%Y%m%d")
     # 현재 날짜의 전날을 종료 날짜로 설정
-    # end_date = datetime.today() - timedelta(days=1)
-    end_date = datetime.strptime("20250322", "%Y%m%d")
+    end_date = datetime.today() - timedelta(days=1)
 
     logging.info(f"크롤링 범위: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
 
@@ -61,27 +59,20 @@ if __name__ == "__main__":
         logging.info(f"크롤링 완료: {len(df)}개의 기사 저장됨")
 
         # Classification 모듈 호출
-        classifier = SemanticTextClassifier(
-            input_file='../../data/raw/article_data.csv',
-            output_dir='../../data/processed/',
-            flask_server_url=None,
-            threshold=0.7,
-            top_n=50
-        )
-        # 제목 추출 키워드 rdb 저장
-        classifier.process_and_send()
+        # classifier = SemanticTextClassifier(input_file=RAW_DATA_PATH, output_dir=PROCESSED_DIR)
+        # classifier.process_and_save()
 
         # Milvus 연결
-        connect_milvus()
+        # rag.connect_milvus()
 
         # 기존 컬렉션 삭제 (이미 존재하면 삭제)
-        # remove_collection("news_article")
+        # rag.remove_collection("news_article")
 
         # 컬렉션 생성
-        # create_collection("news_article")
+        # rag.create_domestic()
 
         # 뉴스 임베딩 저장
-        store_article_embedding("news_article")
+        # rag.store_domestic()
 
     else:
         logging.warning("크롤링 실패 또는 유효한 데이터 없음")
@@ -94,4 +85,4 @@ if __name__ == "__main__":
     print("크롤링이 완료되었습니다.")
 
     # 드라이버 종료
-    close_driver()
+    # close_driver()
