@@ -1,0 +1,77 @@
+import os
+import psycopg2
+from dotenv import load_dotenv
+from langchain_community.chat_message_histories import ChatMessageHistory
+
+# 환경 변수 로드
+load_dotenv()
+
+# PostgreSQL 연결 함수
+def get_db_connection():
+    return psycopg2.connect(
+        host=os.getenv("DB_HOST"),
+        database=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        port=os.getenv("DB_PORT")
+    )
+
+
+# 대화 기록 불러오기
+def get_session_history(chat_room_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        query = """
+        SELECT message, response, created_at 
+        FROM chat_messages
+        WHERE chat_room_id = %s
+        ORDER BY created_at ASC
+        """
+        cursor.execute(query, (chat_room_id,))
+        messages = cursor.fetchall()
+
+        chat_history = ChatMessageHistory()
+
+        for user_msg, bot_response, _ in messages:
+            chat_history.add_user_message(user_msg)
+            chat_history.add_ai_message(bot_response)
+
+        cursor.close()
+        conn.close()
+        return chat_history
+
+    except Exception as e:
+        print(f"[ERROR] PostgreSQL 대화 기록 조회 중 오류 발생: {str(e)}")
+        return ChatMessageHistory()
+
+
+# 사용자 페르소나 불러오기
+def get_user_persona(member_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        query = "SELECT persona_preset FROM member WHERE id = %s"
+        cursor.execute(query, (member_id,))
+        result = cursor.fetchone()
+
+        cursor.close()
+        conn.close()
+
+        persona_preset = int(result[0]) if result else 1  # 기본값: 1
+
+        persona_prompts = {
+            1: "당신은 최신 기술과 시장 변화를 분석하고 요약하는 전문가 AI입니다.",
+            2: "당신은 업계 트렌드를 분석하고 실무 적용 인사이트를 제공하는 AI입니다.",
+            3: "당신은 친근하고 자연스럽게 대화하는 AI입니다.",
+            4: "당신은 긍정적이고 격려하는 스타일로 정보를 제공하는 AI입니다.",
+            5: "당신은 유머러스한 예시를 활용해 정보를 쉽게 전달하는 AI입니다."
+        }
+
+        return persona_prompts.get(persona_preset, "당신은 친절하고 정확한 정보를 제공하는 AI입니다.")
+
+    except Exception as e:
+        print(f"[ERROR] PostgreSQL에서 persona_preset 조회 중 오류 발생: {str(e)}")
+        return "당신은 친절하고 정확한 정보를 제공하는 AI입니다."  # 기본값

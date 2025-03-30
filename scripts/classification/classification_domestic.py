@@ -1,9 +1,8 @@
 import os
 import pandas as pd
-import requests
 from collections import defaultdict, Counter
 from konlpy.tag import Okt
-from datetime import datetime
+import psycopg2
 
 class SemanticTextClassifier:
     def __init__(self, input_file, output_dir, flask_server_url, stopwords_file='../../data/raw/stopwords.txt', threshold=0.7, top_n=10):
@@ -32,21 +31,14 @@ class SemanticTextClassifier:
         ]
         return meaningful_words
 
-    def _convert_date_format(self, date_str):
-        try:
-            date_obj = datetime.strptime(date_str.strip()[:10], "%Y.%m.%d")
-            return date_obj.strftime("%Y-%m-%d")
-        except ValueError:
-            print(f"❌ 잘못된 날짜 형식: {date_str}")
-            return None
 
     def _calculate_word_frequencies(self, df):
         date_word_counts = defaultdict(Counter)
 
         for _, row in df.iterrows():
-            raw_date = row['date']
-            date = self._convert_date_format(raw_date)
-            if date is None:
+            date = row['date']
+            if not isinstance(date, str) or len(date) < 10:
+                print(f"날짜 형식 오류: {date}")
                 continue
 
             title = row['title']
@@ -72,22 +64,40 @@ class SemanticTextClassifier:
             return
 
         word_frequencies = self._calculate_word_frequencies(df)
-        self._send_to_flask_server(word_frequencies)
+        # self._send_to_flask_server(word_frequencies)
+        self._save_to_database(word_frequencies)
 
-    def _send_to_flask_server(self, word_frequencies):
-        response = requests.post(f"{self.flask_server_url}/api/word_frequencies/upload", json=word_frequencies)
+    def _save_to_database(self, word_frequencies):
+        try:
+            conn = psycopg2.connect(
+                host=os.getenv("DB_HOST"),
+                database=os.getenv("DB_NAME"),
+                user=os.getenv("DB_USER"),
+                password=os.getenv("DB_PASSWORD"),
+                port=os.getenv("DB_PORT")
+            )
+            cur = conn.cursor()
 
-        if response.status_code == 201:
-            print("✅ 데이터가 Flask 서버로 성공적으로 전송되었습니다.")
-        else:
-            print(f"❌ 전송 실패: {response.status_code}, {response.json()}")
+            for item in word_frequencies:
+                cur.execute("""
+                    INSERT INTO word_frequencies (date, word, count)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (date, word) DO UPDATE SET count = EXCLUDED.count;
+                """, (item["date"], item["word"], item["count"]))
 
-if __name__ == "__main__":
-    classifier = SemanticTextClassifier(
-        input_file='../../data/raw/article_data.csv',
-        output_dir='../../data/processed/',
-        flask_server_url="http://localhost:8080",
-        threshold=0.7,
-        top_n=50
-    )
-    classifier.process_and_send()
+            conn.commit()
+            cur.close()
+            conn.close()
+            print("✅ DB 저장 완료")
+        except Exception as e:
+            print(f"❌ DB 저장 실패: {str(e)}")
+
+# if __name__ == "__main__":
+#     classifier = SemanticTextClassifier(
+#         input_file='../../data/raw/article_data.csv',
+#         output_dir='../../data/processed/',
+#         flask_server_url="http://localhost:8080",
+#         threshold=0.7,
+#         top_n=50
+#     )
+#     classifier.process_and_send()
