@@ -1,12 +1,16 @@
-import scripts.rag.rag as rag
-from scraper import scrape_articles_by_date
-from parser import parse_data, close_driver
-import scripts.classification.classification_domestic as classification
-from datetime import datetime, timedelta
-import logging
-import pandas as pd
-import time
 import os
+from dotenv import load_dotenv
+from elasticsearch import Elasticsearch
+import pandas as pd
+import logging
+import time
+from datetime import datetime, timedelta
+from scraper import scrape_articles_by_date
+from parser import parse_data
+from scripts.classification import classification_es
+import scripts.rag.rag as rag
+
+load_dotenv()
 
 # 로그 디렉토리 설정
 LOG_DIR = "../../logs"
@@ -26,12 +30,14 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 
+es = Elasticsearch([{'host': os.getenv("ELASTICSEARCH_HOST"), 'port': int(os.getenv("ELASTICSEARCH_PORT")), 'scheme': 'http'}])
+
 # 실행 시작 시간 기록
 start_time = time.time()
 logging.info("main.py 실행 시작")
 
 if __name__ == "__main__":
-    start_date = datetime.strptime("20250329", "%Y%m%d")
+    start_date = datetime.strptime("20250404", "%Y%m%d")
     # 현재 날짜의 전날을 종료 날짜로 설정
     end_date = datetime.today() - timedelta(days=1)
 
@@ -58,21 +64,37 @@ if __name__ == "__main__":
 
         logging.info(f"크롤링 완료: {len(df)}개의 기사 저장됨")
 
-        # Classification 모듈 호출
-        # classifier = SemanticTextClassifier(input_file=RAW_DATA_PATH, output_dir=PROCESSED_DIR)
-        # classifier.process_and_save()
+        # Elasticsearch에 저장
+        for _, article in df.iterrows():
+            doc = {
+                "category": article['category'],
+                "media_company": article['media_company'],
+                "title": article['title'],
+                "date": article['date'],
+                "content": article['content'],
+                "image": article['image'],
+                "url": article['url']
+            }
+
+            try:
+                es.index(index=os.getenv("ELASTICSEARCH_INDEX_NAME"), document=doc)
+                logging.info(f"Elasticsearch에 문서 저장 완료: {article['title']}")
+            except Exception as e:
+                logging.error(f"Error indexing document: {e}")
+
+        # 키워드 빈도수 추출 후 rdb 저장
+        # classifier = classification.SemanticTextClassifier(input_file=raw_save_path)
+        # classifier.process_and_send()
+
+        # 키워드 빈도수, 연관 키워드 추출 후 rdb 저장
+        top_keywords, related_keywords = classification_es.keyword_analysis(date=start_date,
+                                                                            stopwords_file_path="../../data/raw/stopwords.txt")
 
         # Milvus 연결
-        # rag.connect_milvus()
-
-        # 기존 컬렉션 삭제 (이미 존재하면 삭제)
-        # rag.remove_collection("news_article")
-
-        # 컬렉션 생성
-        # rag.create_domestic()
+        rag.connect_milvus()
 
         # 뉴스 임베딩 저장
-        # rag.store_domestic()
+        rag.store_domestic()
 
     else:
         logging.warning("크롤링 실패 또는 유효한 데이터 없음")
