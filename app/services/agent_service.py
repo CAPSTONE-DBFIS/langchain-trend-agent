@@ -5,7 +5,7 @@ from langchain.memory import ConversationBufferMemory
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain.prompts import MessagesPlaceholder
-from app.tools.tools import reddit_tool, youtube_video_tool, search_web_tool, naver_blog_tool, daum_blog_tool, articles_tool, google_trending_tool, wikipedia_tool, translation_tool, request_url_tool, generate_trend_report_tool
+from app.tools.tools import tools
 from app.utils.db import get_session_history, get_user_persona
 from datetime import datetime
 
@@ -22,10 +22,6 @@ def process_query(user_query: str, chat_room_id: str, member_id: str):
 
     # 대화 기록 메모리 설정
     memory = ConversationBufferMemory(return_messages=True, memory_key="chat_history")
-
-    # 검색 도구 (LangChain Agents용 Tool 정의)
-    tools = [search_web_tool, articles_tool, reddit_tool, daum_blog_tool, naver_blog_tool,
-             youtube_video_tool, google_trending_tool, wikipedia_tool, translation_tool, request_url_tool, generate_trend_report_tool]
 
     # PostgreSQL에서 대화 기록 및 페르소나 가져오기
     chat_history = get_session_history(chat_room_id)

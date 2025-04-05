@@ -8,8 +8,6 @@ from langchain_core.runnables.config import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage
-
-# 툴
 from app.tools.tools import reddit_tool, youtube_video_tool, search_web_tool, naver_blog_tool, daum_blog_tool, articles_tool
 
 # PostgreSQL에서 대화 기록 및 페르소나 가져오기

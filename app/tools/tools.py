@@ -591,7 +591,7 @@ def generate_trend_report_tool(search_date: str = None) -> str:
 
         # S3 업로드
         presigned_url = upload_report_to_spring(file_path)
-        return f"보고서 생성 완료!\n📥 [다운로드 링크]({presigned_url}) (7일간 유효)"
+        return f"보고서 생성 완료!\n [다운로드 링크]({presigned_url}) (7일간 유효)"
 
     except Exception as e:
         return f"[GPT 처리 실패] {str(e)}"
@@ -610,8 +610,8 @@ def generate_keyword_bar_chart(keywords: List[str], counts: List[int], search_da
     for bar in bars:
         yval = bar.get_height()
         plt.text(bar.get_x() + bar.get_width()/2, yval + 0.2, int(yval), ha='center', va='bottom')
-    os.makedirs("reports", exist_ok=True)
-    filename = f"reports/keyword_chart_{search_date}_{uuid4().hex[:6]}.png"
+    os.makedirs("crawling/data/reports", exist_ok=True)
+    filename = f"crawling/data/reports/keyword_chart_{search_date}_{uuid4().hex[:6]}.png"
     plt.tight_layout()
     plt.savefig(filename)
     plt.close()
@@ -652,8 +652,9 @@ def save_report_as_docx(content: str, filename: str, image_path: str = None) -> 
         else:
             doc.add_paragraph(line)
 
-    os.makedirs("reports", exist_ok=True)
-    full_path = f"reports/{filename}"
+    # 저장 경로 설정
+    os.makedirs("../../data/reports", exist_ok=True)
+    full_path = f"../../data/reports/{filename}"
     doc.save(full_path)
     return full_path
 
@@ -669,3 +670,17 @@ def upload_report_to_spring(file_path: str):
             return response.json()["url"]
         else:
             raise Exception(f"Spring 업로드 실패: {response.status_code} {response.text}")
+
+tools = [
+    articles_tool,
+    daum_blog_tool,
+    naver_blog_tool,
+    reddit_tool,
+    search_web_tool,
+    youtube_video_tool,
+    request_url_tool,
+    translation_tool,
+    wikipedia_tool,
+    google_trending_tool,
+    generate_trend_report_tool
+]

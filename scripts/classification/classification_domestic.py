@@ -5,12 +5,10 @@ from konlpy.tag import Okt
 import psycopg2
 
 class SemanticTextClassifier:
-    def __init__(self, input_file, output_dir, flask_server_url, stopwords_file='../../data/raw/stopwords.txt', threshold=0.7, top_n=10):
+    def __init__(self, input_file, stopwords_file='../../data/raw/stopwords.txt', threshold=0.7, top_n=10):
         self.input_file = input_file
-        self.output_dir = output_dir
         self.threshold = threshold
         self.top_n = top_n
-        self.flask_server_url = flask_server_url
         self.okt = Okt()
 
         try:
@@ -37,24 +35,19 @@ class SemanticTextClassifier:
 
         for _, row in df.iterrows():
             date = row['date']
-            if not isinstance(date, str) or len(date) != 10:
+            if not isinstance(date, str) or len(date) < 10:
                 print(f"날짜 형식 오류: {date}")
                 continue
 
             title = row['title']
             words = self._remove_josa_with_okt(title)
-            # 디버깅
-            print(f"날짜: {date}, 단어: {words}")
             date_word_counts[date].update(words)
 
         result_list = []
         for date, word_counts in date_word_counts.items():
             for word, count in word_counts.most_common(self.top_n):
                 result_list.append({"date": date, "word": word, "count": count})
-        # 디버깅
-        print("최종 단어 빈도 결과: ")
-        for item in result_list:
-            print(item)
+
         return result_list
 
     def process_and_send(self):
@@ -69,7 +62,6 @@ class SemanticTextClassifier:
             return
 
         word_frequencies = self._calculate_word_frequencies(df)
-        # self._send_to_flask_server(word_frequencies)
         self._save_to_database(word_frequencies)
 
     def _save_to_database(self, word_frequencies):
@@ -93,9 +85,9 @@ class SemanticTextClassifier:
             conn.commit()
             cur.close()
             conn.close()
-            print("✅ DB 저장 완료")
+            print("DB 저장 완료")
         except Exception as e:
-            print(f"❌ DB 저장 실패: {str(e)}")
+            print(f"DB 저장 실패: {str(e)}")
 
 # if __name__ == "__main__":
 #     classifier = SemanticTextClassifier(
