@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import pytz
 import json
 import re
-import openai
+from openai import OpenAI
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 from models import SessionLocal, TrackingKeyword, TrackingResult
@@ -15,7 +15,7 @@ from models import SessionLocal, TrackingKeyword, TrackingResult
 load_dotenv()
 
 # OpenAI API 키 가져오기
-openai.api_key = os.getenv('OPENAI_API_KEY')
+client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 # 네이버 API 키 가져오기
 client_id = os.getenv('NAVER_CLIENT_ID')
@@ -170,18 +170,18 @@ def gpt_analyze_sentiment(comments: List[str], article_title: str) -> Dict[str, 
 
         # GPT 모델에 전달할 prompt 작성 (기사 제목 추가)
         prompt = (
-            f"다음은 '[{article_title}]'에 대한 댓글들입니다. "
-            "이 댓글들을 긍정, 부정, 중립으로 분류해 주세요. "
-            "또한 전체 댓글을 분석하여 간단한 요약 설명을 작성하되, "
-            "긍정적인 반응과 부정적인 반응을 모두 예시와 함께 포함하여 설명하세요.\n\n"
-            "응답은 반드시 JSON 형식으로 정확히 반환해야 합니다. 형식을 반드시 지켜주세요.\n\n"
+            f"다음은 '[{article_title}]'에 대한 댓글들입니다.\n"
+            "이 댓글들을 긍정, 부정, 중립으로 분류해 주세요.\n"
+            "응답은 반드시 JSON 형식으로 정확히 반환해야 합니다. 형식을 반드시 지켜주세요.\n"
+            "description에 전체 댓글을 분석하여 요약 설명을 작성하되, 댓글 내용을 기반으로 자주 언급되는 주요 키워드를 추출하고"
+            "주요 키워드를 바탕으로 전반적인 해석을 긍정, 중립, 부정적인 반응을 모두 예시와 함께 포함하여 제공하세요.\n\n"
             "응답 예시:\n"
             "{\n"
             "  \"comments\": [\n"
             "    {\"comment\": \"이 제품 정말 좋네요.\", \"sentiment\": \"positive\"},\n"
             "    {\"comment\": \"별로예요.\", \"sentiment\": \"negative\"}\n"
             "  ],\n"
-            "  \"description\": \"이 기사에 대한 대부분의 댓글은 긍정적인 반응을 보이고 있습니다. 예를 들어, '정말 유용합니다.'와 같은 반응이 있습니다. 하지만 일부는 부정적인 의견도 존재하며, 예를 들어 '별로예요.'와 같은 반응도 보였습니다.\"\n"
+            "  \"description\": \"여기에 분석 결과를 작성하세요.\"\n" 
             "}\n\n"
             "다음은 분석할 댓글 목록입니다:\n"
         )
@@ -189,7 +189,7 @@ def gpt_analyze_sentiment(comments: List[str], article_title: str) -> Dict[str, 
         for comment in batch_comments:
             prompt += f"- {comment}\n"
 
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that analyzes comments and returns results in JSON format with detailed description."},
@@ -198,20 +198,18 @@ def gpt_analyze_sentiment(comments: List[str], article_title: str) -> Dict[str, 
             temperature=0.0,
         )
 
-        response_text = response.choices[0].message['content'].strip()
+        # gpt 응답 파싱
+        response_text = response.choices[0].message.content.strip()
 
-        # 코드 블록 제거 및 JSON 포맷으로 변환
-        if response_text.startswith("```json"):
-            response_text = response_text[7:].strip()
-        if response_text.endswith("```"):
-            response_text = response_text[:-3].strip()
-
+        # JSON 형식으로 변환하기
         try:
-            # 응답 파싱
-            parsed_response = json.loads(response_text)
-            if isinstance(parsed_response, dict):
+            parsed_response = parse_gpt_response(response_text)
+            if parsed_response:
                 comment_analysis = parsed_response.get("comments", [])
                 description = parsed_response.get("description", "")
+
+                print("댓글 분석 결과:", comment_analysis)
+                print("설명:", description)
 
                 for entry in comment_analysis:
                     sentiment = entry.get('sentiment', '').lower()
@@ -301,7 +299,30 @@ def save_to_db(db_session: Session):
 
         db_session.add(tracking_result)
         db_session.commit()
+        print("[db 저장 완료]")
 
+
+def parse_gpt_response(response_text: str):
+    # 앞뒤 공백 제거
+    cleaned_response = response_text.strip()
+
+    # ```json ... ``` 과 같은 코드 블록 태그 제거하기
+    if cleaned_response.startswith("```json"):
+        cleaned_response = cleaned_response[7:]  # ```json 이후부터
+    if cleaned_response.endswith("```"):
+        cleaned_response = cleaned_response[:-3]  # 끝의 ``` 제거
+
+    # 다시 확인
+    print("[GPT 응답 내용]:\n", cleaned_response)
+
+    try:
+        # JSON 파싱 시도
+        parsed_response = json.loads(cleaned_response)
+        print("[JSON 파싱 완료]")
+        return parsed_response
+    except json.JSONDecodeError as e:
+        print(f"[JSON 파싱 오류 발생]: {e}")
+        return None
 
 if __name__ == "__main__":
     # DB 세션 생성
