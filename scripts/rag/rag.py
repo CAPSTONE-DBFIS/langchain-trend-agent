@@ -7,6 +7,9 @@ from langchain_milvus import Milvus
 from langchain_core.documents import Document
 from pymilvus import connections, FieldSchema, CollectionSchema, DataType, Collection, utility
 
+# Huggingface Tokenizer의 멀티스레딩 비활성화
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 # 환경변수 로드
 load_dotenv()
 
@@ -162,7 +165,6 @@ def store_article_embedding(
         )
 
         if existing_docs:
-            print(f"이미 존재하는 문서: {row['url']} -> 저장 생략")
             continue
 
         # 메타데이터 생성: metadata_mapping의 키는 Document 메타데이터의 키, 값은 CSV 컬럼 이름
@@ -191,6 +193,8 @@ def store_article_embedding(
 
 # 국내 기사 저장
 def store_domestic():
+    connect_milvus()
+
     # news_article 컬렉션에 필요한 메타데이터 매핑 설정
     news_metadata_mapping = {
         "title": "title",

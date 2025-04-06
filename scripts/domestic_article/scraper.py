@@ -1,14 +1,19 @@
-import requests
-from bs4 import BeautifulSoup
-from selenium import webdriver
+import concurrent.futures
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from datetime import datetime, timedelta
 import time
-from selenium.common.exceptions import TimeoutException
+from selenium import webdriver
+from bs4 import BeautifulSoup
+
+def init_driver():
+    options = webdriver.ChromeOptions()
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument("--blink-settings=imagesEnabled=false")
+    driver = webdriver.Chrome(options=options)
+    return driver
 
 # 모든 카테고리의 URL 목록
 CATEGORY_URLS = {
@@ -21,102 +26,82 @@ CATEGORY_URLS = {
     "과학/일반": "https://news.naver.com/breakingnews/section/105/228",
 }
 
-# Selenium 설정
-chrome_options = Options()
-chrome_options.add_argument("--headless")  # 브라우저 창을 띄우지 않음
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
-chrome_options.add_argument("--blink-settings=imagesEnabled=false")
-
-service = Service(executable_path="/opt/homebrew/bin/chromedriver") #Service(executable_path='../../lib/chromedriver-win64/chromedriver.exe')
-driver = webdriver.Chrome(service=service, options=chrome_options)
-
-
-def click_more_articles():
-    """기사 더보기 버튼을 클릭하여 추가 기사 로딩"""
+def click_more_articles(driver):
+    """기사 더보기 버튼을 클릭하여 모든 기사 목록을 로딩"""
     while True:
         try:
             more_button = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.CLASS_NAME, "section_more"))
             )
             more_button.click()
-            time.sleep(2)  # 기사 로딩 대기
+            time.sleep(2)
         except:
-            break  # 더 이상 "기사 더보기" 버튼이 없으면 종료
+            break
 
 
-def scrape_articles_by_date(start_date, end_date):
-    """모든 카테고리에서 시작 날짜부터 종료 날짜까지 크롤링"""
-    all_data = []
+def scrape_category_articles(category_name, target_date):
+    """특정 카테고리에서 지정 날짜의 기사 URL 목록만 수집"""
+    all_urls = []
+    date_str = target_date.strftime("%Y%m%d")
+    print(f"{date_str} - {category_name} 카테고리 URL 수집 시작")
 
-    current_date = start_date
-    while current_date <= end_date:
-        date_str = current_date.strftime("%Y%m%d")  # "YYYYMMDD" 형식 변환
-        print(f"{date_str} 날짜 크롤링 중...")
+    try:
+        base_url = CATEGORY_URLS.get(category_name)
+        if base_url is None:
+            return []
 
-        for category_name, base_url in CATEGORY_URLS.items():
-            url = f"{base_url}?date={date_str}"
-            print(f"{category_name} 카테고리 크롤링 중...")
+        url = f"{base_url}?date={date_str}"
+        driver = init_driver()
+        driver.get(url)
+        time.sleep(3)
 
-            driver.get(url)
-            time.sleep(3)  # 초기 페이지 로드 대기
+        # 기사 더보기 버튼 클릭 로직 추가
+        click_more_articles(driver)
 
-            # 기사 더보기 클릭
-            click_more_articles()
+        # BeautifulSoup으로 HTML 파싱
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        latest_section = soup.find("div", class_="section_latest_article _CONTENT_LIST _PERSIST_META")
 
-            # # 추가 기사들이 완전히 로드될 때까지 대기
-            # WebDriverWait(driver, 10).until(
-            #     EC.presence_of_all_elements_located((By.CLASS_NAME, "section_article"))
-            # )
-            # time.sleep(3)  # 추가 기사들이 로드될 시간을 추가로 확보
+        if not latest_section:
+            print(f"{date_str} - {category_name} 기사 목록을 찾을 수 없습니다.")
+            return []
 
+        article_sections = latest_section.find_all("div", class_="section_article _TEMPLATE")
+
+        for section in article_sections:
+            links = [a["href"] for a in section.find_all("a", class_="sa_text_title", href=True)]
+            all_urls.extend(links)
+
+        if all_urls:
+            print(f"{category_name} URL 수집 완료, {len(all_urls)} 수집")
+        else:
+            print(f"{category_name} URL 수집 실패")
+
+    except Exception as e:
+        print(f"에러 발생: {e}")
+    finally:
+        driver.quit()
+
+    return all_urls
+
+
+def scrape_all_categories_in_parallel(target_date, max_workers):
+    """모든 카테고리에 대해 병렬로 URL 목록 수집"""
+    all_results = {}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_category = {
+            executor.submit(scrape_category_articles, category_name, target_date): category_name
+            for category_name in CATEGORY_URLS.keys()
+        }
+
+        for future in concurrent.futures.as_completed(future_to_category):
+            category = future_to_category[future]
             try:
-                # 추가 기사들이 완전히 로드될 때까지 대기
-                WebDriverWait(driver, 10).until(
-                    EC.presence_of_all_elements_located((By.CLASS_NAME, "section_article"))
-                )
-            except TimeoutException:
-                print(f"❌ {category_name} 카테고리에서 요소를 찾지 못했습니다. 넘어갑니다.")
-                continue  # 또는 pass
-            time.sleep(3) # 추가 기사들이 로드될 시간을 추가로 확보
+                result = future.result()
+                all_results[category] = result
+                print(f"{category} URL 수집 완료")
+            except Exception as e:
+                print(f"{category} URL 수집 실패: {e}")
 
-            # **동적으로 로딩된 HTML을 가져와서 BeautifulSoup으로 파싱**
-            soup = BeautifulSoup(driver.page_source, "html.parser")
-            latest_section = soup.find("div", class_="section_latest_article _CONTENT_LIST _PERSIST_META")
-
-            if not latest_section:
-                print(f"{date_str} - {category_name} 기사 목록을 찾을 수 없습니다.")
-                continue
-
-            article_sections = latest_section.find_all("div", class_="section_article _TEMPLATE")
-
-            if not article_sections:
-                print(f"{date_str} - {category_name} 개별 기사 섹션을 찾을 수 없습니다.")
-                continue
-
-            print(f"{date_str} - {category_name} 기사 {len(article_sections) * 6}개 발견")
-
-            for section in article_sections:
-                links = [
-                    a["href"]
-                    for a in section.find_all("a", class_="sa_text_title", href=True)
-                ]
-
-                for article_url in links:
-                    try:
-                        driver.get(article_url)
-                        time.sleep(2)  # 기사 페이지 로딩 대기
-                        all_data.append({
-                            "category": category_name,  # 카테고리 추가
-                            "date": date_str,  # 기사 날짜 추가
-                            "html": driver.page_source,
-                            "url": article_url
-                        })
-                    except Exception as e:
-                        print(f"{date_str} - {category_name} 기사 {article_url} 크롤링 실패. 오류: {e}")
-
-        current_date += timedelta(days=1)  # 다음 날짜로 이동
-
-    driver.quit()
-    print("모든 날짜와 카테고리의 크롤링 완료")
-    return all_data
+    return all_results
