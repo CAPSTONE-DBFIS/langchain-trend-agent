@@ -38,9 +38,9 @@ start_time = time.time()
 logging.info("main.py 실행 시작")
 
 if __name__ == "__main__":
-    max_workers = 7 # 스레드 수 (시스템 사양에 따라 조절)
-    start_date = datetime.strptime("20250403", "%Y%m%d")  # 시작 날짜
-    end_date = datetime.strptime("20250405", "%Y%m%d")  # 종료 날짜
+    max_workers = 5 # 스레드 수 (시스템 사양에 따라 조절)
+    start_date = datetime.strptime("20250330", "%Y%m%d")  # 시작 날짜
+    end_date = datetime.strptime("20250402", "%Y%m%d")  # 종료 날짜
 
     # 크롤링할 날짜 범위 반복
     current_date = start_date
@@ -54,7 +54,7 @@ if __name__ == "__main__":
         # URL들을 단일 리스트로 변환
         article_urls = []
         for urls in category_urls.values():
-            if isinstance(urls, list):  # 리스트일 때만 추가
+            if isinstance(urls, list):
                 article_urls.extend(urls)
 
         if not article_urls:

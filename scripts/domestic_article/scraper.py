@@ -5,6 +5,8 @@ from selenium.webdriver.support import expected_conditions as EC
 import time
 from selenium import webdriver
 from bs4 import BeautifulSoup
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
 def init_driver():
     options = webdriver.ChromeOptions()
@@ -12,7 +14,9 @@ def init_driver():
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument("--blink-settings=imagesEnabled=false")
-    driver = webdriver.Chrome(options=options)
+
+    # webdriver-manager 사용
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     return driver
 
 # 모든 카테고리의 URL 목록
@@ -73,7 +77,7 @@ def scrape_category_articles(category_name, target_date):
             all_urls.extend(links)
 
         if all_urls:
-            print(f"{category_name} URL 수집 완료, {len(all_urls)} 수집")
+            print(f"카테고리: {category_name} URL 수집 완료, {len(all_urls)}개 수집")
         else:
             print(f"{category_name} URL 수집 실패")
 
@@ -100,8 +104,8 @@ def scrape_all_categories_in_parallel(target_date, max_workers):
             try:
                 result = future.result()
                 all_results[category] = result
-                print(f"{category} URL 수집 완료")
-            except Exception as e:
-                print(f"{category} URL 수집 실패: {e}")
 
+            except Exception as e:
+                print(f"{category} URL 수집 중 에러: {e}")
+    print("모든 카테고리 URL 수집 완료")
     return all_results

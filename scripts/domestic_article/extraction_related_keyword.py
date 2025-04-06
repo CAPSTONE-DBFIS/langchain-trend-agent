@@ -147,6 +147,3 @@ def keyword_analysis(date, stopwords_file_path="../../data/raw/stopwords.txt"):
     print("연관 키워드 RDB 저장 완료")
 
     return top_keywords, related_keywords
-
-# # 예시 실행
-# keyword_analysis(date=datetime.strptime("20250401", "%Y%m%d"))

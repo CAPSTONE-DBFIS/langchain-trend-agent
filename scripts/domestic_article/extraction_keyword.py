@@ -117,13 +117,3 @@ class SemanticTextClassifier:
 
         except Exception as e:
             print(f"키워드 빈도수 데이터 RDB 저장 실패: {str(e)}")
-
-# if __name__ == "__main__":
-#     classifier = SemanticTextClassifier(
-#         input_file='../../data/raw/article_data.csv',
-#         output_dir='../../data/processed/',
-#         flask_server_url="http://localhost:8080",
-#         threshold=0.7,
-#         top_n=50
-#     )
-#     classifier.process_and_send()

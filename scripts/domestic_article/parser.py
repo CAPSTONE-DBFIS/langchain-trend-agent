@@ -3,6 +3,8 @@ import time
 from datetime import datetime
 from bs4 import BeautifulSoup
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
 def init_driver():
     options = webdriver.ChromeOptions()
@@ -10,7 +12,9 @@ def init_driver():
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument("--blink-settings=imagesEnabled=false")
-    driver = webdriver.Chrome(options=options)
+
+    # webdriver-manager 사용
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     return driver
 
 def parse_data(url):
@@ -62,7 +66,8 @@ def parse_data(url):
 
 def parse_articles_in_parallel(article_urls, max_workers):
     """병렬로 기사 내용을 파싱하는 함수"""
+    print("HTML 파싱 시작")
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(executor.map(parse_data, article_urls))
-    print("모든 URL 파싱 완료")
+    print("모든 HTML 파싱 완료")
     return results
