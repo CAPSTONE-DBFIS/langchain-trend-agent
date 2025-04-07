@@ -7,6 +7,9 @@ from langchain_milvus import Milvus
 from langchain_core.documents import Document
 from pymilvus import connections, FieldSchema, CollectionSchema, DataType, Collection, utility
 
+# Huggingface Tokenizer의 멀티스레딩 비활성화
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 # 환경변수 로드
 load_dotenv()
 
@@ -137,9 +140,24 @@ def store_article_embedding(
 
     new_documents = []
     for _, row in df.iterrows():
-        chunks = text_splitter.split_text(row[text_field])
+        text_content = row.get(text_field, None)
 
-        # 중복 확인 (예: URL을 기준)
+        # 본문 타입 예외 처리
+        if not isinstance(text_content, str):
+            print(f"유효하지 않은 텍스트 데이터 (index: {_}): {text_content}")
+            continue  # 텍스트가 아니면 건너뜀
+
+        if len(text_content.strip()) == 0:
+            print(f"빈 텍스트 데이터 (index: {_})")
+            continue  # 빈 문자열이면 건너뜀
+
+        try:
+            chunks = text_splitter.split_text(text_content)
+        except Exception as e:
+            print(f"텍스트 분할 중 오류 발생 (index: {_}): {e}")
+            continue
+
+        # 중복 확인 (URL 기준)
         filter_expression = f"url == '{row['url']}'"
         existing_docs = collection.query(
             expr=filter_expression,
@@ -147,7 +165,6 @@ def store_article_embedding(
         )
 
         if existing_docs:
-            print(f"이미 존재하는 문서: {row['url']} -> 저장 생략")
             continue
 
         # 메타데이터 생성: metadata_mapping의 키는 Document 메타데이터의 키, 값은 CSV 컬럼 이름
@@ -176,6 +193,8 @@ def store_article_embedding(
 
 # 국내 기사 저장
 def store_domestic():
+    connect_milvus()
+
     # news_article 컬렉션에 필요한 메타데이터 매핑 설정
     news_metadata_mapping = {
         "title": "title",
