@@ -38,9 +38,11 @@ start_time = time.time()
 logging.info("main.py 실행 시작")
 
 if __name__ == "__main__":
-    max_workers = 5 # 스레드 수 (시스템 사양에 따라 조절)
-    start_date = datetime.strptime("20250330", "%Y%m%d")  # 시작 날짜
-    end_date = datetime.strptime("20250402", "%Y%m%d")  # 종료 날짜
+    max_workers = 1 # 스레드 수 (시스템 사양에 따라 조절)
+
+    # 현재 시간 기준으로 설정
+    start_date = datetime.strptime(datetime.now().strftime("%Y%m%d"), "%Y%m%d")
+    end_date = datetime.strptime(datetime.now().strftime("%Y%m%d"), "%Y%m%d")
 
     # 크롤링할 날짜 범위 반복
     current_date = start_date
@@ -73,23 +75,33 @@ if __name__ == "__main__":
 
         logging.info(f"{current_date.strftime('%Y-%m-%d')} 크롤링 완료: {len(df)}개의 기사 저장됨")
 
-        # Elasticsearch 저장
+        # CSV 파일에서 데이터 읽기
+        df = pd.read_csv(raw_save_path, encoding="utf-8-sig")
+
+        # Elasticsearch에 저장
         for _, article in df.iterrows():
+            # 데이터가 올바른 형식인지 확인 후 Elasticsearch에 저장
             doc = {
-                "category": article['category'],
-                "media_company": article['media_company'],
-                "title": article['title'],
-                "date": article['date'],
-                "content": article['content'],
-                "url": article['url']
+                "category": article['category'] if isinstance(article['category'], str) else '',
+                "media_company": article['media_company'] if isinstance(article['media_company'], str) else '',
+                "title": article['title'] if isinstance(article['title'], str) else '',
+                "date": article['date'] if isinstance(article['date'], str) else '',
+                "content": article['content'] if isinstance(article['content'], str) else '',
+                "url": article['url'] if isinstance(article['url'], str) else ''
             }
 
-            try:
-                doc_id = article['url']  # URL을 고유한 id로 사용하여 중복 방지
-                es.index(index=os.getenv("ELASTICSEARCH_INDEX_NAME"), id=doc_id, document=doc)
-                logging.info(f"Elasticsearch에 문서 저장 완료: {article['title']}")
-            except Exception as e:
-                logging.error(f"Error indexing document: {e}")
+            # 날짜가 str 형식이면 변환, 이미 날짜 형식이면 그대로 둠
+            if isinstance(doc['date'], str):
+                doc['date'] = datetime.strptime(doc['date'], '%Y-%m-%d').strftime('%Y-%m-%d')
+
+            # Elasticsearch에 저장
+            doc_id = article['url']  # URL을 고유한 id로 사용하여 중복 방지
+            es.index(index=os.getenv("ELASTICSEARCH_INDEX_NAME"), id=doc_id, document=doc)
+
+        ##### 제목 긍부정 분석 추가 위치
+
+        logging.info(f"Elasticsearch에 기사 저장 완료")
+        print(f"Elasticsearch에 기사 저장 완료")
 
         # 키워드 빈도수 추출 후 RDB 저장
         classifier = extraction_keyword.SemanticTextClassifier(input_file=raw_save_path)
