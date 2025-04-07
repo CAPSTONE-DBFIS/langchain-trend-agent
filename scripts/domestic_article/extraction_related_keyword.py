@@ -70,11 +70,14 @@ def save_related_keywords_to_db(date, top_keywords, related_keywords):
     )
     cur = conn.cursor()
 
-    for keyword_id, word, _ in top_keywords:  # keyword_id 추가됨
-        for related_word, count in related_keywords[word]:
+    for keyword_id, word, _ in top_keywords:
+        if word not in related_keywords:
+            continue
+
+        for rank, (related_word, count) in enumerate(related_keywords[word], start=1):  # 순위 추가
             cur.execute(
-                "INSERT INTO keyword_analysis (keyword_id, keyword, related_keyword, frequency, date) VALUES (%s, %s, %s, %s, %s)",
-                (keyword_id, word, related_word, count, date)
+                "INSERT INTO keyword_analysis (keyword_id, keyword, related_keyword, frequency, rank, date) VALUES (%s, %s, %s, %s, %s, %s)",
+                (keyword_id, word, related_word, count, rank, date)  # rank 추가
             )
 
     conn.commit()
@@ -86,29 +89,37 @@ def save_related_keywords_to_db(date, top_keywords, related_keywords):
 def keyword_analysis(date, stopwords_file_path="../../data/raw/stopwords.txt"):
     stopwords = load_stopwords(stopwords_file_path)
 
-    # PostgreSQL에서 상위 10개의 키워드 로드
+    # 날짜를 문자열 형식으로 변환 (yyyy-MM-dd)
+    if isinstance(date, datetime):
+        date = date.strftime('%Y-%m-%d')
+
     top_keywords = load_top_keywords_from_db(date)
     if not top_keywords:
-        print("해당 날짜에 대한 키워드 데이터가 없습니다.")
+        print("해당 날짜에 대한 키워드가 존재하지 않습니다.")
         return [], {}
 
     related_keywords = {}
 
     for keyword_id, word, _ in top_keywords:
+        print(f"\n=== 키워드 분석: {word} ===")
+
         query_related = {
             "query": {
                 "bool": {
                     "must": [
                         {
-                            "match": {
-                                "content": word
+                            "multi_match": {
+                                "query": word,
+                                "fields": ["title", "title.standard", "content"],
+                                "operator": "or"
                             }
                         },
                         {
                             "range": {
                                 "date": {
                                     "gte": date,
-                                    "lte": date
+                                    "lte": date,
+                                    "format": "yyyy-MM-dd"
                                 }
                             }
                         }
@@ -117,33 +128,49 @@ def keyword_analysis(date, stopwords_file_path="../../data/raw/stopwords.txt"):
             }
         }
 
-        # Elasticsearch에서 해당 키워드가 포함된 문서 검색
-        related_response = es.search(index=os.getenv("ELASTICSEARCH_INDEX_NAME"), body=query_related, size=1000)
+        try:
+            related_response = es.search(index=os.getenv("ELASTICSEARCH_INDEX_NAME"), body=query_related, size=1000)
+            print(f"'{word}' 키워드 포함 문서 수: {len(related_response['hits']['hits'])}")
+        except Exception as e:
+            print(f"Elasticsearch Error: {e}")
+            continue
 
+        # 연관 키워드를 추출할 카운터 준비
         related_keywords_for_word = Counter()
-        processed_documents = set()  # 처리한 문서 ID를 기록
+        processed_documents = set()  # 이미 처리된 문서 추적
 
         for hit in related_response['hits']['hits']:
-            doc_id = hit['_id']  # Elasticsearch에서 문서 ID를 가져옴
-
-            # 이미 처리한 문서라면 건너뛰기
+            doc_id = hit['_id']
             if doc_id in processed_documents:
                 continue
+            processed_documents.add(doc_id)
 
-            processed_documents.add(doc_id)  # 문서 ID 기록
+            # 제목에서 키워드 추출
+            title = hit['_source'].get('title', "")
 
-            content = hit['_source']['content']
-            related_keywords_for_word.update(extract_keywords(content, stopwords))
+            extracted_keywords = extract_keywords(title, stopwords)
 
-        # 검색 키워드 자신을 제거
+            # 각 문서에서 키워드가 한 번만 등장하는 것으로 카운트
+            unique_keywords = set(extracted_keywords)  # 중복된 키워드를 제거하기 위해 set으로 변환
+            for keyword in unique_keywords:
+                related_keywords_for_word[keyword] += 1  # 해당 문서에서 키워드가 등장한 것으로 카운트
+
+        # 자기 자신을 제외
         if word in related_keywords_for_word:
             del related_keywords_for_word[word]
 
-        # 관련 키워드 상위 10개 저장
+        # 연관 키워드 상위 10개 추출
         related_keywords[word] = related_keywords_for_word.most_common(10)
+        print(f"'{word}' 연관 키워드: {related_keywords[word]}")
 
-    # RDB에 저장
     save_related_keywords_to_db(date, top_keywords, related_keywords)
     print("연관 키워드 RDB 저장 완료")
 
     return top_keywords, related_keywords
+
+# print(keyword_analysis(date="2025-04-01"))
+# print(keyword_analysis(date="2025-04-02"))
+# print(keyword_analysis(date="2025-04-03"))
+# print(keyword_analysis(date="2025-04-04"))
+# print(keyword_analysis(date="2025-04-05"))
+# print(keyword_analysis(date="2025-04-06"))
