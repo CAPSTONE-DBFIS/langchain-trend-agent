@@ -40,7 +40,7 @@ logging.info("main.py 실행 시작")
 if __name__ == "__main__":
     max_workers = 4  # 스레드 수 (시스템 사양에 따라 조절)
 
-    start_date = datetime.strptime(datetime.now().strftime("%Y%m%d"), "%Y%m%d")
+    start_date = datetime.now() - timedelta(days=1)
     end_date = start_date
 
     # 크롤링할 날짜 범위 반복
@@ -49,7 +49,7 @@ if __name__ == "__main__":
         print(f"{current_date.strftime('%Y-%m-%d')} 크롤링 시작")
         logging.info(f"{current_date.strftime('%Y-%m-%d')} 날짜 크롤링 시작")
 
-        # URL 수집 단계 (scraper.py 사용)
+        # URL 수집 단계
         category_urls = scrape_all_categories_in_parallel(current_date, max_workers)  # 모든 URL을 수집하여 딕셔너리로 반환
 
         # URL들을 단일 리스트로 변환
@@ -87,7 +87,7 @@ if __name__ == "__main__":
                 "date": article['date'] if isinstance(article['date'], str) else '',
                 "content": article['content'] if isinstance(article['content'], str) else '',
                 "url": article['url'] if isinstance(article['url'], str) else '',
-                "image_url": article['image_url'] if isinstance(article['image_url'], str) else ''  # 이미지 URL 추가
+                "image_url": article['image_url'] if isinstance(article['image_url'], str) else ''
             }
 
             # 날짜가 str 형식이면 변환, 이미 날짜 형식이면 그대로 둠
