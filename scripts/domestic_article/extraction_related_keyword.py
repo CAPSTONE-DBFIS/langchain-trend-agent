@@ -108,10 +108,12 @@ def keyword_analysis(date, stopwords_file_path="../../data/raw/stopwords.txt"):
                 "bool": {
                     "must": [
                         {
-                            "multi_match": {
-                                "query": word,
-                                "fields": ["title", "title.standard", "content"],
-                                "operator": "or"
+                            "bool": {
+                                "should": [
+                                    {"wildcard": {"title": f"*{word}*"}},
+                                    {"wildcard": {"content": f"*{word}*"}}
+                                ],
+                                "minimum_should_match": 1
                             }
                         },
                         {
@@ -174,3 +176,4 @@ def keyword_analysis(date, stopwords_file_path="../../data/raw/stopwords.txt"):
 # print(keyword_analysis(date="2025-04-04"))
 # print(keyword_analysis(date="2025-04-05"))
 # print(keyword_analysis(date="2025-04-06"))
+# print(keyword_analysis(date="2025-04-07"))
