@@ -103,6 +103,9 @@ def keyword_analysis(date, stopwords_file_path="../../data/raw/stopwords.txt"):
     for keyword_id, word, _ in top_keywords:
         print(f"\n=== 키워드 분석: {word} ===")
 
+        # 영어 키워드는 소문자로 변환
+        search_word = word.lower() if word.isascii() else word
+
         query_related = {
             "query": {
                 "bool": {
@@ -110,8 +113,8 @@ def keyword_analysis(date, stopwords_file_path="../../data/raw/stopwords.txt"):
                         {
                             "bool": {
                                 "should": [
-                                    {"wildcard": {"title": f"*{word}*"}},
-                                    {"wildcard": {"content": f"*{word}*"}}
+                                    {"wildcard": {"title": f"*{search_word}*"}},
+                                    {"wildcard": {"content": f"*{search_word}*"}}
                                 ],
                                 "minimum_should_match": 1
                             }
