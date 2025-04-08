@@ -38,11 +38,10 @@ start_time = time.time()
 logging.info("main.py 실행 시작")
 
 if __name__ == "__main__":
-    max_workers = 1 # 스레드 수 (시스템 사양에 따라 조절)
+    max_workers = 4  # 스레드 수 (시스템 사양에 따라 조절)
 
-    # 현재 시간 기준으로 설정
     start_date = datetime.strptime(datetime.now().strftime("%Y%m%d"), "%Y%m%d")
-    end_date = datetime.strptime(datetime.now().strftime("%Y%m%d"), "%Y%m%d")
+    end_date = start_date
 
     # 크롤링할 날짜 범위 반복
     current_date = start_date
@@ -70,7 +69,7 @@ if __name__ == "__main__":
 
         # 파싱된 데이터 DataFrame으로 변환 및 CSV로 저장
         df = pd.DataFrame(parsed_data)
-        df = df[["category", "media_company", "title", "date", "content", "url"]]
+        df = df[["category", "media_company", "title", "date", "content", "url", "image_url"]]  # 이미지 URL 포함
         df.to_csv(raw_save_path, index=False, encoding="utf-8-sig")
 
         logging.info(f"{current_date.strftime('%Y-%m-%d')} 크롤링 완료: {len(df)}개의 기사 저장됨")
@@ -87,7 +86,8 @@ if __name__ == "__main__":
                 "title": article['title'] if isinstance(article['title'], str) else '',
                 "date": article['date'] if isinstance(article['date'], str) else '',
                 "content": article['content'] if isinstance(article['content'], str) else '',
-                "url": article['url'] if isinstance(article['url'], str) else ''
+                "url": article['url'] if isinstance(article['url'], str) else '',
+                "image_url": article['image_url'] if isinstance(article['image_url'], str) else ''  # 이미지 URL 추가
             }
 
             # 날짜가 str 형식이면 변환, 이미 날짜 형식이면 그대로 둠
@@ -97,8 +97,6 @@ if __name__ == "__main__":
             # Elasticsearch에 저장
             doc_id = article['url']  # URL을 고유한 id로 사용하여 중복 방지
             es.index(index=os.getenv("ELASTICSEARCH_INDEX_NAME"), id=doc_id, document=doc)
-
-        ##### 제목 긍부정 분석 추가 위치
 
         logging.info(f"Elasticsearch에 기사 저장 완료")
         print(f"Elasticsearch에 기사 저장 완료")
