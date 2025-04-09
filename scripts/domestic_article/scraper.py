@@ -49,6 +49,7 @@ def scrape_category_articles(category_name, target_date):
     date_str = target_date.strftime("%Y%m%d")
     print(f"{date_str} - {category_name} 카테고리 URL 수집 시작")
 
+    driver = None  # driver를 먼저 None으로 초기화
     try:
         base_url = CATEGORY_URLS.get(category_name)
         if base_url is None:
@@ -84,7 +85,8 @@ def scrape_category_articles(category_name, target_date):
     except Exception as e:
         print(f"에러 발생: {e}")
     finally:
-        driver.quit()
+        if driver:  # 생성된 경우에만 종료
+            driver.quit()
 
     return all_urls
 
