@@ -20,8 +20,13 @@ LOG_FILE = os.path.join(LOG_DIR, "project.log")
 # 로그 디렉토리가 없으면 생성
 os.makedirs(LOG_DIR, exist_ok=True)
 
-# 데이터 저장 경로 설정
-raw_save_path = "../../data/raw/article_data.csv"
+# 데이터 저장 경로 설정 (절대 경로)
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+raw_save_path = os.path.join(BASE_DIR, "data", "raw", "article_data.csv")
+
+#stopword 경로
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+STOPWORDS_PATH = os.path.join(BASE_DIR, "data", "raw", "stopwords.txt")
 
 # 로그 설정
 logging.basicConfig(
@@ -108,7 +113,7 @@ if __name__ == "__main__":
         # 연관 키워드 추출 후 RDB 저장
         top_keywords, related_keywords = extraction_related_keyword.keyword_analysis(
             date=current_date,
-            stopwords_file_path="../../data/raw/stopwords.txt"
+            stopwords_file_path=STOPWORDS_PATH
         )
 
         # 본문 임베딩 저장
