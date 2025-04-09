@@ -5,8 +5,12 @@ from konlpy.tag import Okt
 import psycopg2
 from datetime import datetime
 
+# 불용어 경로
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+STOPWORDS_PATH = os.path.join(BASE_DIR, "data", "raw", "stopwords.txt")
+
 class SemanticTextClassifier:
-    def __init__(self, input_file, stopwords_file='../../data/raw/stopwords.txt', threshold=0.7, top_n=50):
+    def __init__(self, input_file, stopwords_file=STOPWORDS_PATH, threshold=0.7, top_n=50):
         self.input_file = input_file
         self.threshold = threshold
         self.top_n = top_n
