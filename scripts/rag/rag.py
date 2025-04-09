@@ -19,9 +19,9 @@ DIMENSION = 768
 MILVUS_HOST = os.getenv("MILVUS_HOST")
 MILVUS_PORT = os.getenv("MILVUS_PORT")
 URI = f"tcp://{MILVUS_HOST}:{MILVUS_PORT}"
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ARTICLE_DATA_PATH_1 = "../../data/raw/article_data.csv"
-ARTICLE_DATA_PATH_2 = "../../data/raw/techcrunch_article.csv"
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+ARTICLE_DATA_PATH_1 = os.path.join(BASE_DIR, "data", "raw", "article_data.csv")
+ARTICLE_DATA_PATH_2 = os.path.join(BASE_DIR, "data", "raw", "techcrunch_article.csv")
 
 
 # news_article 컬렉션에 사용할 필드
