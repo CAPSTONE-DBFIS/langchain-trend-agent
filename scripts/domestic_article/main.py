@@ -7,8 +7,8 @@ import time
 from datetime import datetime, timedelta
 from scraper import scrape_all_categories_in_parallel
 from parser import parse_articles_in_parallel
-from scripts.domestic_article import extraction_keyword
-from scripts.domestic_article import extraction_related_keyword
+import extraction_keyword
+import extraction_related_keyword
 import scripts.rag.rag as rag
 
 load_dotenv()
