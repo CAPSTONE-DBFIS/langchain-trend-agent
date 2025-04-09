@@ -15,6 +15,10 @@ es = Elasticsearch(
 # 형태소 분석기 설정
 okt = Okt()
 
+#stopword 경로
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+STOPWORDS_PATH = os.path.join(BASE_DIR, "data", "raw", "stopwords.txt")
+
 
 # stopwords.txt에서 불용어 불러오기
 def load_stopwords(file_path):
@@ -86,7 +90,7 @@ def save_related_keywords_to_db(date, top_keywords, related_keywords):
 
 
 # 연관 검색어 분석 함수
-def keyword_analysis(date, stopwords_file_path="../../data/raw/stopwords.txt"):
+def keyword_analysis(date, stopwords_file_path=STOPWORDS_PATH):
     stopwords = load_stopwords(stopwords_file_path)
 
     # 날짜를 문자열 형식으로 변환 (yyyy-MM-dd)
