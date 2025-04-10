@@ -44,12 +44,12 @@ def click_more_articles(driver):
 
 
 def scrape_category_articles(category_name, target_date):
-    """특정 카테고리에서 지정 날짜의 기사 URL 목록만 수집"""
-    all_urls = []
+    """특정 카테고리에서 지정 날짜의 기사 URL 목록과 카테고리 정보를 함께 수집"""
+    all_data = []  # { "url": url, "category": category_name } 형식으로 저장
     date_str = target_date.strftime("%Y%m%d")
     print(f"{date_str} - {category_name} 카테고리 URL 수집 시작")
 
-    driver = None  # driver를 먼저 None으로 초기화
+    driver = None
     try:
         base_url = CATEGORY_URLS.get(category_name)
         if base_url is None:
@@ -60,10 +60,8 @@ def scrape_category_articles(category_name, target_date):
         driver.get(url)
         time.sleep(3)
 
-        # 기사 더보기 버튼 클릭 로직 추가
         click_more_articles(driver)
 
-        # BeautifulSoup으로 HTML 파싱
         soup = BeautifulSoup(driver.page_source, "html.parser")
         latest_section = soup.find("div", class_="section_latest_article _CONTENT_LIST _PERSIST_META")
 
@@ -72,41 +70,41 @@ def scrape_category_articles(category_name, target_date):
             return []
 
         article_sections = latest_section.find_all("div", class_="section_article _TEMPLATE")
-
         for section in article_sections:
             links = [a["href"] for a in section.find_all("a", class_="sa_text_title", href=True)]
-            all_urls.extend(links)
+            # URL마다 해당 카테고리 값을 함께 저장
+            for link in links:
+                all_data.append({"url": link, "category": category_name})
 
-        if all_urls:
-            print(f"카테고리: {category_name} URL 수집 완료, {len(all_urls)}개 수집")
+        if all_data:
+            print(f"카테고리: {category_name} URL 수집 완료, {len(all_data)}개 수집")
         else:
             print(f"{category_name} URL 수집 실패")
 
     except Exception as e:
         print(f"에러 발생: {e}")
     finally:
-        if driver:  # 생성된 경우에만 종료
+        if driver:
             driver.quit()
 
-    return all_urls
+    return all_data
 
 
 def scrape_all_categories_in_parallel(target_date, max_workers):
-    """모든 카테고리에 대해 병렬로 URL 목록 수집"""
-    all_results = {}
-
+    """모든 카테고리에 대해 병렬로 URL 및 카테고리 정보 수집"""
+    all_results = []  # 전체 리스트
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_category = {
             executor.submit(scrape_category_articles, category_name, target_date): category_name
             for category_name in CATEGORY_URLS.keys()
         }
-
         for future in concurrent.futures.as_completed(future_to_category):
             category = future_to_category[future]
             try:
                 result = future.result()
-                all_results[category] = result
-
+                if result:
+                    # result는 [{'url': ..., 'category': category_name}, ...]
+                    all_results.extend(result)
             except Exception as e:
                 print(f"{category} URL 수집 중 에러: {e}")
     print("모든 카테고리 URL 수집 완료")
