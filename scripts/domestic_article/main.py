@@ -13,12 +13,14 @@ import scripts.rag.rag as rag
 
 load_dotenv()
 
-# 로그 디렉토리 설정
-LOG_DIR = "../../logs"
-LOG_FILE = os.path.join(LOG_DIR, "project.log")
+# 현재 파일 기준 절대 경로 설정
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+LOG_DIR = os.path.join(BASE_DIR, "logs")
 
 # 로그 디렉토리가 없으면 생성
 os.makedirs(LOG_DIR, exist_ok=True)
+
+LOG_FILE = os.path.join(LOG_DIR, "project.log")
 
 # 데이터 저장 경로 설정 (절대 경로)
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
