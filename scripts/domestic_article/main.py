@@ -47,7 +47,7 @@ es = Elasticsearch(
 
 # 실행 시작 시간 기록
 start_time = time.time()
-logging.info("main.py 실행 시작")
+logging.info("main.py run start")
 
 if __name__ == "__main__":
     max_workers = 4  # 스레드 수 (시스템 사양에 따라 조절)
@@ -60,14 +60,14 @@ if __name__ == "__main__":
     while current_date <= end_date:
         date_str = current_date.strftime('%Y-%m-%d')
         print(f"{current_date.strftime('%Y-%m-%d')} 크롤링 시작")
-        logging.info(f"{current_date.strftime('%Y-%m-%d')} 날짜 크롤링 시작")
+        logging.info(f"{current_date.strftime('%Y-%m-%d')} Start date crawling")
 
         # Scraper: 모든 카테고리의 기사 URL과 해당 카테고리 정보를 딕셔너리 리스트로 병렬로 수집
         article_info_list = scrape_all_categories_in_parallel(current_date, max_workers)
 
         if not article_info_list:
             print("URL 수집 실패 또는 유효한 URL이 없음")
-            logging.warning(f"{date_str} 크롤링 실패 또는 유효한 데이터 없음")
+            logging.warning(f"{current_date.strftime('%Y-%m-%d')} Crawling failed or no valid data")
             current_date += timedelta(days=1)
             continue
 
@@ -79,7 +79,7 @@ if __name__ == "__main__":
         df = df[["category", "media_company", "title", "date", "content", "url", "image_url"]]  # 이미지 URL 포함
         df.to_csv(raw_save_path, index=False, encoding="utf-8-sig")
 
-        logging.info(f"{current_date.strftime('%Y-%m-%d')} 크롤링 완료: {len(df)}개의 기사 저장됨")
+        logging.info(f"{current_date.strftime('%Y-%m-%d')} Crawling completed: {len(df)}articles saved")
 
         # CSV 파일에서 데이터 읽기
         df = pd.read_csv(raw_save_path, encoding="utf-8-sig")
@@ -105,7 +105,7 @@ if __name__ == "__main__":
             doc_id = article['url']  # URL을 고유한 id로 사용하여 중복 방지
             es.index(index=os.getenv("ELASTICSEARCH_INDEX_NAME"), id=doc_id, document=doc)
 
-        logging.info(f"Elasticsearch에 기사 저장 완료")
+        logging.info(f"Complete saving of articles to Elasticsearch")
         print(f"Elasticsearch에 기사 저장 완료")
 
         # 키워드 빈도수 추출 후 RDB 저장
@@ -126,6 +126,6 @@ if __name__ == "__main__":
     # 실행 종료 로그 기록
     end_time = time.time()
     elapsed_time = round(end_time - start_time, 2)
-    logging.info(f"실행 종료 (소요 시간: {elapsed_time}초)")
+    logging.info(f"runtime: {elapsed_time}sec)")
     print(f"실행 종료 (소요 시간: {elapsed_time}초)")
     print("크롤링이 완료되었습니다.")
