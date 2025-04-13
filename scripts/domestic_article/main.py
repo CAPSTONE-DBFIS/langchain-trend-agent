@@ -34,6 +34,7 @@ STOPWORDS_PATH = os.path.join(BASE_DIR, "data", "raw", "stopwords.txt")
 logging.basicConfig(
     filename=LOG_FILE,
     level=logging.INFO,
+    filemode='a',
     format="%(asctime)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     encoding="utf-8"
@@ -60,14 +61,14 @@ if __name__ == "__main__":
     while current_date <= end_date:
         date_str = current_date.strftime('%Y-%m-%d')
         print(f"{current_date.strftime('%Y-%m-%d')} 크롤링 시작")
-        logging.info(f"{current_date.strftime('%Y-%m-%d')} Start date crawling")
+        logging.info(f"{date_str} Start date crawling")
 
         # Scraper: 모든 카테고리의 기사 URL과 해당 카테고리 정보를 딕셔너리 리스트로 병렬로 수집
         article_info_list = scrape_all_categories_in_parallel(current_date, max_workers)
 
         if not article_info_list:
             print("URL 수집 실패 또는 유효한 URL이 없음")
-            logging.warning(f"{current_date.strftime('%Y-%m-%d')} Crawling failed or no valid data")
+            logging.warning(f"{date_str} Crawling failed or no valid data")
             current_date += timedelta(days=1)
             continue
 
