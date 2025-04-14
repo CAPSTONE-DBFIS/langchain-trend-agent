@@ -10,6 +10,7 @@ from parser import parse_articles_in_parallel
 import extraction_keyword
 import extraction_related_keyword
 import scripts.rag.rag as rag
+from zoneinfo import ZoneInfo
 
 load_dotenv()
 
@@ -50,7 +51,8 @@ logging.info("main.py 실행 시작")
 if __name__ == "__main__":
     max_workers = 4  # 스레드 수 (시스템 사양에 따라 조절)
 
-    start_date = datetime.now() - timedelta(days=1)
+    kst_now = datetime.now(ZoneInfo("Asia/Seoul"))  # 현재 KST 시간으로 크롤링 시작
+    start_date = kst_now - timedelta(days=1)
     end_date = start_date
 
     # 크롤링할 날짜 범위 반복
