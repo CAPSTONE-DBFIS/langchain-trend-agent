@@ -31,11 +31,11 @@ from docx.shared import Inches
 load_dotenv()
 
 @tool
-def articles_tool(query: str) -> List[Dict[str, Union[str, float]]]:
+async def rag_news_search_tool(query: str) -> List[Dict[str, Union[str, float]]]:
     """
-    Milvus에서 RAG를 이용한 뉴스 기사 검색 도구.
+    Milvus에서 RAG를 이용한 의미 기반 뉴스 기사 검색 도구.
 
-    Milvus에 저장된 뉴스 기사 데이터에서 입력된 키워드(query)와 가장 유사한 기사를 검색합니다.
+    Milvus에 저장된 뉴스 기사 데이터에서 입력된 키워드와 의미상 가장 유사한 기사를 검색합니다.
     최근 30일 내 등록된 문서를 우선 검색하며, 충분한 결과가 없을 경우 전체 데이터에서 추가 검색을 수행합니다.
 
     Args:
@@ -59,11 +59,11 @@ def articles_tool(query: str) -> List[Dict[str, Union[str, float]]]:
     # 최신 문서 우선 검색 (최근 30일 내)
     recent_timestamp = int(time.time()) - (30 * 86400)
     latest_results = vector_store.similarity_search_with_score_by_vector(
-        query_embedding, k=3, filter={"timestamp": {"$gte": recent_timestamp}}
+        query_embedding, k=5, filter={"timestamp": {"$gte": recent_timestamp}}
     )
 
     # 최신 문서가 부족하면 전체 검색 추가
-    if len(latest_results) < 3:
+    if len(latest_results) < 5:
         additional_results = vector_store.similarity_search_with_score_by_vector(query_embedding, k=5)
         combined_results = latest_results + [doc for doc in additional_results if doc not in latest_results]
     else:
@@ -81,7 +81,7 @@ def articles_tool(query: str) -> List[Dict[str, Union[str, float]]]:
     ]
 
 @tool
-def daum_blog_tool(keyword, max_results=10):
+async def daum_blog_tool(keyword, max_results=10):
     """
     Daum 블로그 검색 도구.
 
@@ -131,7 +131,7 @@ def clean_html(text: str) -> str:
     return text
 
 @tool
-def naver_blog_tool(keyword: str, max_result: int = 10, days: int = 30) -> List[Dict[str, str]]:
+async def naver_blog_tool(keyword: str, max_result: int = 10, days: int = 30) -> List[Dict[str, str]]:
     """
     네이버 블로그 검색 도구.
 
@@ -212,7 +212,7 @@ def get_reddit_access_token():
     return response.json().get("access_token")
 
 @tool
-def reddit_tool(keyword: str, max_results: int = 10) -> list:
+async def reddit_tool(keyword: str, max_results: int = 10) -> list:
     """
     Reddit 인기 게시글 검색 도구.
 
@@ -263,7 +263,7 @@ def reddit_tool(keyword: str, max_results: int = 10) -> list:
 
 
 @tool
-def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, str]]:
+async def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, str]]:
     """
     실시간 웹 검색 도구.
 
@@ -286,7 +286,7 @@ def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, str]]:
 
 
 @tool
-def youtube_video_tool(query: str, max_results: int = 5):
+async def youtube_video_tool(query: str, max_results: int = 5):
     """
     YouTube 동영상 검색 도구.
 
@@ -332,7 +332,7 @@ def youtube_video_tool(query: str, max_results: int = 5):
     return results
 
 @tool
-def request_url_tool(input_url: str) -> str:
+async def request_url_tool(input_url: str) -> str:
     """
     웹페이지 또는 PDF 문서에서 텍스트를 추출하는 도구.
 
@@ -369,7 +369,7 @@ def request_url_tool(input_url: str) -> str:
         return f"Error processing the URL: {e}"
 
 @tool
-def translation_tool(asking: str) -> str:
+async def translation_tool(asking: str) -> str:
     """
     ChatGPT를 이용한 번역 도구.
 
@@ -394,7 +394,7 @@ def translation_tool(asking: str) -> str:
         return f"Error: {e}"
 
 @tool
-def wikipedia_tool(query: str) -> str:
+async def wikipedia_tool(query: str) -> str:
     """
     Wikipedia 검색 도구.
 
@@ -417,7 +417,7 @@ def wikipedia_tool(query: str) -> str:
 
 
 @tool
-def google_trending_tool(query: str, startDate: str = None, endDate: str = None) -> Dict[
+async def google_trending_tool(query: str, startDate: str = None, endDate: str = None) -> Dict[
     str, Union[str, List[float], List[str]]]:
     """
     Google Trends 키워드 검색 도구.
@@ -484,7 +484,7 @@ def google_trending_tool(query: str, startDate: str = None, endDate: str = None)
         return {"error": f"Error retrieving Google Trends data: {str(e)}"}
 
 @tool
-def generate_trend_report_tool(search_date: str = None) -> str:
+async def generate_trend_report_tool(search_date: str = None) -> str:
     """
         db에 저장된 날짜별 키워드를 기반으로 Milvus에서 관련 뉴스를 검색하고,
         GPT를 통해 종합적인 트렌드 분석 보고서를 생성합니다.
@@ -671,8 +671,51 @@ def upload_report_to_spring(file_path: str):
         else:
             raise Exception(f"Spring 업로드 실패: {response.status_code} {response.text}")
 
+@tool
+async def get_daily_news_trend_tool(date: str) -> str:
+    """
+    특정 날짜의 뉴스 기사 상위 키워드와 각 키워드의 연관 키워드, 뉴스 기사 데이터를 가져옵니다.
+
+    Args:
+        date (str): 조회 날짜 (YYYY-MM-DD)
+
+    Returns:
+        str: 트렌드 리포트 데이터 JSON 문자열 (오류 발생 시 오류 메시지 포함)
+    """
+    try:
+        url = f"http://localhost:8080/api/insight?date={date}"
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.text
+    except Exception as e:
+        return f"트렌드 리포트 데이터 조회 실패: {e}"
+
+
+@tool
+async def keyword_news_search_tool(keyword: str, relatedKeyword: str, date: str, page: int = 0) -> str:
+    """
+    키워드와 연관 키워드가 포함된 네이버 뉴스 기사를 elastic search에서 검색하는 도구입니다.
+
+    Args:
+        keyword (str): 주 검색 키워드 (예: "AI")
+        relatedKeyword (str): 연관 검색 키워드 (예: "삼성")
+        date (str): 검색 기준 날짜 (YYYY-MM-DD)
+        page (int, optional): 페이지 번호 (기본값: 0)
+
+    Returns:
+        str: 연관 기사 검색 결과 JSON 문자열 (오류 발생 시 오류 메시지 포함)
+    """
+    try:
+        url = (f"http://localhost:8080/api/insight/related-search?"
+               f"keyword={keyword}&relatedKeyword={relatedKeyword}&date={date}&page={page}")
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.text
+    except Exception as e:
+        return f"연관 기사 검색 실패: {e}"
+
 tools = [
-    articles_tool,
+    rag_news_search_tool,
     daum_blog_tool,
     naver_blog_tool,
     reddit_tool,
@@ -682,5 +725,7 @@ tools = [
     translation_tool,
     wikipedia_tool,
     google_trending_tool,
-    generate_trend_report_tool
+    generate_trend_report_tool,
+    get_daily_news_trend_tool,
+    keyword_news_search_tool
 ]

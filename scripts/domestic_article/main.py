@@ -37,7 +37,11 @@ logging.basicConfig(
     encoding="utf-8"
 )
 
-es = Elasticsearch([{'host': os.getenv("ELASTICSEARCH_HOST"), 'port': int(os.getenv("ELASTICSEARCH_PORT")), 'scheme': 'http'}])
+# Elasticsearch 클라이언트 생성 (비밀번호 추가)
+es = Elasticsearch(
+    [{'host': os.getenv("ELASTICSEARCH_HOST"), 'port': int(os.getenv("ELASTICSEARCH_PORT")), 'scheme': 'http'}],
+    basic_auth=(os.getenv("ELASTICSEARCH_USERNAME"), os.getenv("ELASTICSEARCH_PASSWORD"))
+)
 
 # 실행 시작 시간 기록
 start_time = time.time()
@@ -52,26 +56,21 @@ if __name__ == "__main__":
     # 크롤링할 날짜 범위 반복
     current_date = start_date
     while current_date <= end_date:
+        date_str = current_date.strftime('%Y-%m-%d')
         print(f"{current_date.strftime('%Y-%m-%d')} 크롤링 시작")
         logging.info(f"{current_date.strftime('%Y-%m-%d')} 날짜 크롤링 시작")
 
-        # URL 수집 단계
-        category_urls = scrape_all_categories_in_parallel(current_date, max_workers)  # 모든 URL을 수집하여 딕셔너리로 반환
+        # Scraper: 모든 카테고리의 기사 URL과 해당 카테고리 정보를 딕셔너리 리스트로 병렬로 수집
+        article_info_list = scrape_all_categories_in_parallel(current_date, max_workers)
 
-        # URL들을 단일 리스트로 변환
-        article_urls = []
-        for urls in category_urls.values():
-            if isinstance(urls, list):
-                article_urls.extend(urls)
-
-        if not article_urls:
+        if not article_info_list:
             print("URL 수집 실패 또는 유효한 URL이 없음")
-            logging.warning(f"{current_date.strftime('%Y-%m-%d')} 크롤링 실패 또는 유효한 데이터 없음")
+            logging.warning(f"{date_str} 크롤링 실패 또는 유효한 데이터 없음")
             current_date += timedelta(days=1)
-            continue  # 다음 날짜로 이동
+            continue
 
-        # URL들을 병렬로 파싱
-        parsed_data = parse_articles_in_parallel(article_urls, max_workers)
+        # Parser: 수집된 기사 정보(각 dict에 "url", "category" 포함)를 기반으로 HTML 병렬 파싱
+        parsed_data = parse_articles_in_parallel(article_info_list, max_workers)
 
         # 파싱된 데이터 DataFrame으로 변환 및 CSV로 저장
         df = pd.DataFrame(parsed_data)

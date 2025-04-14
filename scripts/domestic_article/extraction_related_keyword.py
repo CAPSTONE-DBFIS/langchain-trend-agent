@@ -8,9 +8,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Elasticsearch 연결 설정
+# Elasticsearch 클라이언트 생성 (비밀번호 추가)
 es = Elasticsearch(
-    [{'host': os.getenv("ELASTICSEARCH_HOST"), 'port': int(os.getenv("ELASTICSEARCH_PORT")), 'scheme': 'http'}])
+    [{'host': os.getenv("ELASTICSEARCH_HOST"), 'port': int(os.getenv("ELASTICSEARCH_PORT")), 'scheme': 'http'}],
+    basic_auth=(os.getenv("ELASTICSEARCH_USERNAME"), os.getenv("ELASTICSEARCH_PASSWORD"))
+)
 
 # 형태소 분석기 설정
 okt = Okt()
