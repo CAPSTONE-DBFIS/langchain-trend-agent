@@ -7,8 +7,12 @@ from selenium import webdriver
 from bs4 import BeautifulSoup
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
+import logging
 
 def init_driver():
+    # web driver 호출 시에 로깅되던 것을 WARNING시에만 뜨도록 조정
+    logging.getLogger("WDM").setLevel(logging.WARNING)
+
     options = webdriver.ChromeOptions()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
