@@ -1,3 +1,4 @@
+import os
 import concurrent.futures
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -20,7 +21,14 @@ def init_driver():
     options.add_argument("--blink-settings=imagesEnabled=false")
 
     # webdriver-manager 사용
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    # 크롬드라이버 경로 설치 및 권한 부여
+    driver_path = ChromeDriverManager().install()
+
+    # 권한 문제 해결: 실행 권한
+    os.system(f"chmod +x {driver_path}")
+
+    # 드라이버 실행
+    driver = webdriver.Chrome(service=Service(driver_path), options=options)
     return driver
 
 # 모든 카테고리의 URL 목록
