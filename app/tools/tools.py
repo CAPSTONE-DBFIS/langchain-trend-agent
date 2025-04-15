@@ -27,6 +27,10 @@ import matplotlib.pyplot as plt
 from uuid import uuid4
 from docx import Document
 from docx.shared import Inches
+import asyncio
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+import redis
 
 load_dotenv()
 
@@ -483,30 +487,55 @@ async def google_trending_tool(query: str, startDate: str = None, endDate: str =
     except Exception as e:
         return {"error": f"Error retrieving Google Trends data: {str(e)}"}
 
+# Redis 연결
+r = redis.Redis(
+    host=os.getenv("REDIS_HOST"),
+    port=os.getenv("REDIS_PORT"),
+    password=os.getenv("REDIS_PASSWORD"),
+    decode_responses=True
+)
+
 @tool
 async def generate_trend_report_tool(search_date: str = None) -> str:
     """
-        db에 저장된 날짜별 키워드를 기반으로 Milvus에서 관련 뉴스를 검색하고,
-        GPT를 통해 종합적인 트렌드 분석 보고서를 생성합니다.
+    DB에 저장된 날짜별 네이버 뉴스 상위 키워드를 기반으로 Milvus에서 관련 뉴스를 검색하고,
+    GPT를 통해 종합적인 트렌드 분석 보고서를 생성합니다.
 
-        Args:
-            date (str, optional): 보고서를 생성할 날짜 (예: '2025-03-12').
-                                  기본값은 오늘 날짜.
+    ⚠️ 주의:
+        - 본 함수는 "오늘 날짜(오늘 00시 이후)" 기준 데이터는 사용할 수 없습니다.
+        - 뉴스 크롤링은 매일 자정(00:00) 기준으로 하루 단위 수집되므로,
+          가장 최근 사용 가능한 날짜는 "어제 날짜(n-1일)"입니다.
+        - Redis 캐시로 7일간 보고서 재사용 가능
 
-        Returns:
-            str: 트렌드 인사이트 보고서가 저장된 amazon S3 presigned url
-        """
+    Args:
+        search_date (str, optional): 보고서를 생성할 날짜 (예: '2025-03-12').
+                                     기본값은 오늘 날짜 기준 어제(n-1일)로 자동 설정됩니다.
+
+    Returns:
+        str: 트렌드 인사이트 보고서가 저장된 Amazon S3 presigned URL
+    """
+
+    kst = ZoneInfo("Asia/Seoul")
+    kst_now = datetime.now(kst)
 
     if search_date is None:
-        search_date = datetime.today().strftime('%Y-%m-%d')
+        search_date = (kst_now - timedelta(days=1)).strftime('%Y-%m-%d')
+
+    if search_date == kst_now.strftime('%Y-%m-%d'):
+        return "[요청 오류] 오늘 날짜의 뉴스 데이터는 아직 수집되지 않았습니다."
+
+    cache_key = f"trend_report:{search_date}"
+    cached_url = r.get(cache_key)
+    if cached_url:
+        return f"Redis에 캐시된 보고서입니다.\n[다운로드 링크]({cached_url}) (7일간 유효)"
 
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
-            SELECT word, count FROM word_frequencies
+            SELECT keyword, frequency FROM keyword_frequencies
             WHERE date = %s
-            ORDER BY count DESC
+            ORDER BY rank ASC
             LIMIT 10
         """, (search_date,))
         rows = cur.fetchall()
@@ -519,7 +548,7 @@ async def generate_trend_report_tool(search_date: str = None) -> str:
         return f"[데이터 없음] {search_date} 날짜에 해당하는 키워드가 없습니다."
 
     keywords = [row[0] for row in rows]
-    counts = [row[1] for row in rows]
+    frequencies = [row[1] for row in rows]
     keyword_summary = "\n".join([f"- {w}: {c}회" for w, c in rows])
 
     try:
@@ -528,25 +557,10 @@ async def generate_trend_report_tool(search_date: str = None) -> str:
     except Exception as e:
         return f"[Milvus 연결 실패] {str(e)}"
 
-    combined_contents = ""
-    for kw in keywords:
-        try:
-            query_embedding = embedding_model.embed_query(kw)
-            results = vector_store.similarity_search_with_score_by_vector(
-                query_embedding,
-                k=3,
-                filter={"date": {"$contains": search_date}}
-            )
-            for doc, score in results:
-                title = doc.metadata.get("title", "")
-                content = doc.page_content.strip()
-                date = doc.metadata.get("date", "null")
-                media = doc.metadata.get("media_company", "null")
-                url = doc.metadata.get("url", "null")
-                if content and search_date in date:
-                    combined_contents += f"\n[키워드: {kw}] | 기사 제목: {title} | 기사 날짜: {date} | 언론사: {media} | 링크: {url}\n{content}\n"
-        except Exception as e:
-            combined_contents += f"\n['{kw}' 검색 실패] {str(e)}\n"
+    # 병렬 실행
+    tasks = [search_keyword(kw, search_date, embedding_model, vector_store) for kw in keywords]
+    results = await asyncio.gather(*tasks)
+    combined_contents = "".join(results)
 
     if not combined_contents.strip():
         return f"[뉴스 없음] {search_date} 기준 키워드로 검색된 뉴스가 없습니다."
@@ -558,9 +572,9 @@ async def generate_trend_report_tool(search_date: str = None) -> str:
     아래의 키워드 출현 빈도 및 관련 기사 내용을 기반으로,
     [개요 - 본론 - 결론] 형식을 따르는 공식적인 보고서를 작성해줘.
 
-    ❗ 마크다운이나 기호 없이, 일반 문단 형식으로 작성해줘.  
-    ❗ 각 섹션은 '개요', '본론', '결론' 제목으로 구분해줘.
-    ❗ 본론에서 키워드 빈도수를 언급하고, 해당 키워드가 언급된 기사 요약은 통합적으로 정리하되, 어떤 흐름이 있었는지 중심으로 작성해줘.
+    마크다운이나 기호 없이, 일반 문단 형식으로 작성해줘.  
+    각 섹션은 '개요', '본론', '결론' 제목으로 구분해줘.
+    본론에서 키워드 빈도수를 언급하고, 해당 키워드가 언급된 기사 요약은 통합적으로 정리하되, 어떤 흐름이 있었는지 중심으로 작성해줘.
 
     {date} 기준 IT 키워드 트렌드:
 
@@ -585,16 +599,40 @@ async def generate_trend_report_tool(search_date: str = None) -> str:
         gpt_text = result["text"]
 
         # 시각화 + Word 저장
-        chart_path = generate_keyword_bar_chart(keywords, counts, search_date)
+        chart_path = generate_keyword_bar_chart(keywords, frequencies, search_date)
         filename = f"TRENDB_daily_report_{search_date}_{uuid4().hex[:8]}.docx"
         file_path = save_report_as_docx(gpt_text, filename, image_path=chart_path)
 
         # S3 업로드
         presigned_url = upload_report_to_spring(file_path)
+
+        # 보고서 url redis 캐시 저장 (TTL = 7일 = presigned url 만료기간)
+        r.setex(cache_key, timedelta(days=7), presigned_url)
         return f"보고서 생성 완료!\n [다운로드 링크]({presigned_url}) (7일간 유효)"
 
     except Exception as e:
         return f"[GPT 처리 실패] {str(e)}"
+
+async def search_keyword(kw, search_date, embedding_model, vector_store):
+    try:
+        query_embedding = embedding_model.embed_query(kw)
+        results = vector_store.similarity_search_with_score_by_vector(
+            query_embedding,
+            k=10,
+            filter={"date": {"$contains": search_date}}
+        )
+        entries = ""
+        for doc, score in results:
+            title = doc.metadata.get("title", "")
+            content = doc.page_content.strip()
+            date = doc.metadata.get("date", "null")
+            media = doc.metadata.get("media_company", "null")
+            url = doc.metadata.get("url", "null")
+            if content and search_date in date:
+                entries += f"\n[키워드: {kw}] | 기사 제목: {title} | 기사 날짜: {date} | 언론사: {media} | 링크: {url}\n{content}\n"
+        return entries
+    except Exception as e:
+        return f"\n['{kw}' 검색 실패] {str(e)}\n"
 
 
 def generate_keyword_bar_chart(keywords: List[str], counts: List[int], search_date: str) -> str:
