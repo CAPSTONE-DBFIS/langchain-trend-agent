@@ -21,6 +21,7 @@ from pytrends.request import TrendReq
 from typing import Dict, Union, List
 from app.utils.milvus import get_embedding_model, get_vector_store
 from app.utils.db import get_db_connection
+from app.utils.redis_util import get_redis_client
 import matplotlib
 matplotlib.use('Agg') # 백엔드에서 작업
 import matplotlib.pyplot as plt
@@ -30,8 +31,6 @@ from docx.shared import Inches
 import asyncio
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-import redis
-
 load_dotenv()
 
 @tool
@@ -487,13 +486,6 @@ async def google_trending_tool(query: str, startDate: str = None, endDate: str =
     except Exception as e:
         return {"error": f"Error retrieving Google Trends data: {str(e)}"}
 
-# Redis 연결
-r = redis.Redis(
-    host=os.getenv("REDIS_HOST"),
-    port=os.getenv("REDIS_PORT"),
-    password=os.getenv("REDIS_PASSWORD"),
-    decode_responses=True
-)
 
 @tool
 async def generate_trend_report_tool(search_date: str = None) -> str:
@@ -523,6 +515,8 @@ async def generate_trend_report_tool(search_date: str = None) -> str:
 
     if search_date == kst_now.strftime('%Y-%m-%d'):
         return "[요청 오류] 오늘 날짜의 뉴스 데이터는 아직 수집되지 않았습니다."
+
+    r = get_redis_client() # redis 연결
 
     cache_key = f"trend_report:{search_date}"
     cached_url = r.get(cache_key)
