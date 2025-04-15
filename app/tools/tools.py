@@ -86,7 +86,7 @@ async def rag_news_search_tool(query: str) -> List[Dict[str, Union[str, float]]]
 @tool
 async def daum_blog_tool(keyword, max_results=10):
     """
-    Daum 블로그 검색 도구.
+    커뮤니티 트렌드 - Daum 블로그 검색 도구.
 
     Daum 블로그 API를 사용하여 특정 키워드(keyword)와 관련된 블로그 게시글을 검색합니다.
 
@@ -136,7 +136,7 @@ def clean_html(text: str) -> str:
 @tool
 async def naver_blog_tool(keyword: str, max_result: int = 10, days: int = 30) -> List[Dict[str, str]]:
     """
-    네이버 블로그 검색 도구.
+    커뮤니티 트렌드 - 네이버 블로그 검색 도구.
 
     네이버 블로그에서 특정 키워드(keyword)로 최근 일정 기간(days) 내 게시된 글을 검색합니다.
 
@@ -217,7 +217,7 @@ def get_reddit_access_token():
 @tool
 async def reddit_tool(keyword: str, max_results: int = 10) -> list:
     """
-    Reddit 인기 게시글 검색 도구.
+    커뮤니티 트렌드 - Reddit 인기 게시글 검색 도구.
 
     Reddit에서 입력된 키워드(keyword)와 관련된 인기 게시글을 검색합니다.
 
@@ -291,7 +291,7 @@ async def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, s
 @tool
 async def youtube_video_tool(query: str, max_results: int = 5):
     """
-    YouTube 동영상 검색 도구.
+    커뮤니티 트렌드 - YouTube 동영상 검색 도구.
 
     YouTube API를 사용하여 특정 키워드(query)와 관련된 동영상을 검색합니다.
 
@@ -490,13 +490,14 @@ async def google_trending_tool(query: str, startDate: str = None, endDate: str =
 @tool
 async def generate_trend_report_tool(search_date: str = None) -> str:
     """
+    트렌드 레포트 생성 도구.
     DB에 저장된 날짜별 네이버 뉴스 상위 키워드를 기반으로 Milvus에서 관련 뉴스를 검색하고,
     GPT를 통해 종합적인 트렌드 분석 보고서를 생성합니다.
 
     ⚠️ 주의:
-        - 본 함수는 "오늘 날짜(오늘 00시 이후)" 기준 데이터는 사용할 수 없습니다.
+        - 본 도구는 "오늘 날짜(오늘 00시 이후)" 기준 데이터는 사용할 수 없습니다.
         - 뉴스 크롤링은 매일 자정(00:00) 기준으로 하루 단위 수집되므로,
-          가장 최근 사용 가능한 날짜는 "어제 날짜(n-1일)"입니다.
+          가장 최근 사용 가능한 날짜는 "어제 날짜"입니다.
         - Redis 캐시로 7일간 보고서 재사용 가능
 
     Args:
@@ -706,7 +707,14 @@ def upload_report_to_spring(file_path: str):
 @tool
 async def get_daily_news_trend_tool(date: str) -> str:
     """
+    일간 트렌드 정보를 가져오는 도구.
+
     특정 날짜의 뉴스 기사 상위 키워드와 각 키워드의 연관 키워드, 뉴스 기사 데이터를 가져옵니다.
+
+    ⚠️ 주의:
+        - 본 도구는 "오늘 날짜(오늘 00시 이후)" 기준 데이터는 사용할 수 없습니다.
+        - 뉴스 크롤링은 매일 자정(00:00) 기준으로 하루 단위 수집되므로,
+          가장 최근 사용 가능한 날짜는 "어제 날짜"입니다.
 
     Args:
         date (str): 조회 날짜 (YYYY-MM-DD)
@@ -714,10 +722,19 @@ async def get_daily_news_trend_tool(date: str) -> str:
     Returns:
         str: 트렌드 리포트 데이터 JSON 문자열 (오류 발생 시 오류 메시지 포함)
     """
+    # redis 캐시 조회
+    r = get_redis_client()
+    cache_key = f"daily_trend:{date}"
+    cached = r.get(cache_key)
+    if cached:
+        return cached
+
     try:
         url = f"http://localhost:8080/api/insight?date={date}"
         response = requests.get(url)
         response.raise_for_status()
+        # redis 캐시 저장
+        r.set(cache_key, response.text)
         return response.text
     except Exception as e:
         return f"트렌드 리포트 데이터 조회 실패: {e}"
@@ -728,6 +745,11 @@ async def keyword_news_search_tool(keyword: str, relatedKeyword: str, date: str,
     """
     키워드와 연관 키워드가 포함된 네이버 뉴스 기사를 elastic search에서 검색하는 도구입니다.
 
+    ⚠️ 주의:
+        - 본 도구는 "오늘 날짜(오늘 00시 이후)" 기준 데이터는 사용할 수 없습니다.
+        - 뉴스 크롤링은 매일 자정(00:00) 기준으로 하루 단위 수집되므로,
+          가장 최근 사용 가능한 날짜는 "어제 날짜"입니다.
+
     Args:
         keyword (str): 주 검색 키워드 (예: "AI")
         relatedKeyword (str): 연관 검색 키워드 (예: "삼성")
@@ -737,11 +759,21 @@ async def keyword_news_search_tool(keyword: str, relatedKeyword: str, date: str,
     Returns:
         str: 연관 기사 검색 결과 JSON 문자열 (오류 발생 시 오류 메시지 포함)
     """
+
+    cache_key = f"news:{keyword}:{relatedKeyword}:{date}:{page}"
+    r = get_redis_client()
+    # redis 캐시 조회
+    cached = r.get(cache_key)
+    if cached:
+        return cached
+
     try:
         url = (f"http://localhost:8080/api/insight/related-search?"
                f"keyword={keyword}&relatedKeyword={relatedKeyword}&date={date}&page={page}")
         response = requests.get(url)
         response.raise_for_status()
+        # redis 캐시 저장
+        r.set(cache_key, response.text)
         return response.text
     except Exception as e:
         return f"연관 기사 검색 실패: {e}"
