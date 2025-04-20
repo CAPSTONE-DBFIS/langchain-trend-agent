@@ -79,7 +79,7 @@ def get_user_persona(member_id):
         return "당신은 친절하고 정확한 정보를 제공하는 AI입니다."
 
 
-def save_chat_to_db(query: str, response: str, chat_room_id: int, member_id: str):
+def save_chat_to_db(query: str, response: str, chat_room_id: str, member_id: str):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
