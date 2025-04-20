@@ -1,10 +1,8 @@
 import os
 import openai
-
 import wikipedia
 from dotenv import load_dotenv
 import time
-from datetime import datetime, timedelta
 import requests
 import re
 import io
@@ -19,7 +17,7 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import WikipediaAPIWrapper
 from langchain.tools import tool
 from pytrends.request import TrendReq
-from typing import Dict, Union, List, Any
+from typing import Union
 from app.utils.milvus_util import get_embedding_model, get_domestic_article_vector_store
 from app.utils.db_util import get_db_connection
 from app.utils.redis_util import get_redis_client
@@ -36,6 +34,8 @@ import yfinance as yf
 from langchain_community.tools.reddit_search.tool import RedditSearchRun, RedditSearchSchema
 from langchain_community.utilities.reddit_search import RedditSearchAPIWrapper
 import json
+from typing import Optional, List, Dict, Any
+from elasticsearch import Elasticsearch
 
 load_dotenv()
 
@@ -201,54 +201,48 @@ async def naver_blog_tool(keyword: str, max_result: int = 10, days: int = 30) ->
 
 
 # Reddit API Wrapper 초기화
-reddit_search_tool = RedditSearchRun(
-    api_wrapper=RedditSearchAPIWrapper(
-        reddit_client_id=os.getenv("REDDIT_CLIENT_ID"),
-        reddit_client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
-        reddit_user_agent="web:com.dbfis.chatbot:v1.0.0 (by /u/Hot_Mission1860)"
-    )
+reddit_client_wrapper = RedditSearchAPIWrapper(
+    reddit_client_id=os.getenv("REDDIT_CLIENT_ID"),
+    reddit_client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
+    reddit_user_agent="web:com.dbfis.chatbot:v1.0.0 (by /u/Hot_Mission1860)"
+)
+
+# RedditSearchRun 인스턴스 생성
+reddit_search = RedditSearchRun(
+    api_wrapper=reddit_client_wrapper
 )
 
 @tool
-async def reddit_tool(keyword: str, max_results: int = 10) -> list:
+async def reddit_tool(
+    keyword: str, sort: str = "hot", time_filter: str = "week", subreddit: str = "all", limit: str = "10") -> list:
     """
-    커뮤니티 트렌드 - Reddit 인기 게시글 검색 도구.
+    Reddit 인기 게시글 검색 도구.
 
-    Reddit에서 입력된 키워드(keyword)와 관련된 인기 게시글을 검색합니다.
+    주어진 키워드와 옵션에 따라 Reddit에서 인기 게시글을 비동기로 조회합니다.
 
     Args:
-        keyword (str): 검색할 키워드
-        max_results (int, optional): 최대 검색 결과 수 (기본값: 10)
+        keyword (str): 검색할 키워드.
+        sort (str, optional): 결과 정렬 기준. "hot", "new", "top" 중 하나. 기본값 "hot".
+        time_filter (str, optional): 검색 기간. "hour", "day", "week", "month", "year" 중 하나. 기본값 "week".
+        subreddit (str, optional): 검색할 서브레딧. 기본값 "all".
+        limit (str, optional): 조회할 최대 게시글 수. 반드시 문자열로 전달해야 하며, 기본값 "10".
 
     Returns:
-        List[Dict[str, Union[str, int]]]: 검색된 Reddit 게시글 목록
-            - "title" (str): 게시글 제목
-            - "url" (str): 게시글 URL
-            - "score" (int): 게시글 추천 점수 (upvotes)
-            - "created_utc" (str): 게시글 생성일 (UTC 기준)
+        List[Dict[str, Union[str, int]]]:
+            - title (str): 게시글 제목
+            - url (str): 게시글 URL
+            - score (int): 추천(upvotes) 수
+            - created_utc (str): 게시글 작성 시각 (UTC)
     """
-    search_params = RedditSearchSchema(
+    params = RedditSearchSchema(
         query=keyword,
-        sort="hot",
-        time_filter="week",
-        subreddit="all",
-        limit=str(max_results)
+        sort=sort,
+        time_filter=time_filter,
+        subreddit=subreddit,
+        limit=limit
     )
-
-    try:
-        result = reddit_search_tool.run(tool_input=search_params.dict())
-    except Exception as e:
-        return [{"title": "Reddit API 호출 실패", "url": "", "score": 0, "created_utc": str(e)}]
-
-    return result
-
-    try:
-        result = reddit_search_tool.run(tool_input=search_params.dict())
-    except Exception as e:
-        return [{"title": "Reddit API 호출 실패", "url": "", "score": 0, "created_utc": str(e)}]
-
-    return result
-
+    # 비동기 호출
+    return await reddit_search.arun(tool_input=params.dict())
 
 @tool
 async def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, str]]:
@@ -762,7 +756,7 @@ async def get_daily_news_trend_tool(date: str) -> str:
 
 
 @tool
-async def keyword_news_search_tool(keyword: str, relatedKeyword: str, date: str, page: int = 0) -> str:
+async def keyword_news_search_tool(keyword: str, date_start: str, date_end: str, related_keyword: str = "") -> str:
     """
     키워드와 연관 키워드가 포함된 네이버 뉴스 기사를 elastic search에서 검색하는 도구입니다.
 
@@ -797,17 +791,86 @@ async def keyword_news_search_tool(keyword: str, relatedKeyword: str, date: str,
         r.set(cache_key, response.text)
         return response.text
     except Exception as e:
-        return f"연관 기사 검색 실패: {e}"
+        return f"Elasticsearch 검색 실패: {str(e)}"
 
 @tool
-async def get_stock_price(symbol: str) -> str:
-    """주어진 주식 심볼의 현재 가격을 가져옵니다."""
-    try:
-        stock = yf.Ticker(symbol)
-        current_price = stock.history(period="1d")['Close'].iloc[-1]
-        return f"{symbol}의 현재 가격은 {current_price}입니다."
-    except Exception as e:
-        return f"{symbol}의 주식 가격을 가져오지 못했습니다: {str(e)}"
+async def stock_history_tool(
+    symbol: str,
+    period: Optional[str] = None,
+    interval: Optional[str] = "1d",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    auto_adjust: bool = True,
+    back_adjust: bool = False,
+    proxy: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    주식 히스토리를 조회합니다.
+
+    Args:
+        symbol: 조회할 티커 심볼 (예: 'AAPL', 'LUMN')
+        period: 조회 기간 (예: '1d','5d','1mo','1y','max' 등). start/end와 동시에 사용할 수 없습니다.
+        interval: 데이터 간격 (예: '1m','5m','1h','1d','1wk','1mo' 등)
+        start: 조회 시작일 (YYYY-MM-DD), period 없이 사용 시 필수
+        end: 조회 종료일 (YYYY-MM-DD), start와 함께 사용
+        auto_adjust: 배당·분할 이후 가격 자동 보정 여부
+        back_adjust: 과거 가격 보정 여부
+        proxy: 요청 시 사용할 프록시 URL (예: "http://proxy:8080")
+
+    Returns:
+        {
+          "symbol": symbol,
+          "history": [  # 날짜별 OHLCV 리스트
+            {
+              "date": "2024-06-07",
+              "open": 123.45,
+              "high": 125.00,
+              "low": 122.80,
+              "close": 124.10,
+              "volume": 987654
+            },
+            ...
+          ],
+          "info": { ... }  # 회사 정보
+        }
+    """
+    # Ticker 객체 생성 (proxy는 yfinance 세션 레벨로 지원)
+    ticker = yf.Ticker(symbol, proxy=proxy) if proxy else yf.Ticker(symbol)
+
+    # 기간 vs 날짜 범위 조회
+    if period and not (start or end):
+        df = ticker.history(
+            period=period,
+            interval=interval,
+            auto_adjust=auto_adjust,
+            back_adjust=back_adjust
+        )
+    else:
+        df = ticker.history(
+            start=start,
+            end=end,
+            interval=interval,
+            auto_adjust=auto_adjust,
+            back_adjust=back_adjust
+        )
+
+    # DataFrame → 리스트 of dict
+    records: List[Dict[str, Any]] = []
+    for idx, row in df.iterrows():
+        records.append({
+            "date": idx.strftime("%Y-%m-%d %H:%M:%S"),
+            "open": float(row["Open"]),
+            "high": float(row["High"]),
+            "low": float(row["Low"]),
+            "close": float(row["Close"]),
+            "volume": int(row["Volume"])
+        })
+
+    return {
+        "symbol": symbol,
+        "history": records,
+        "info": ticker.info
+    }
 
 @tool
 async def namuwiki_tool(keyword: str) -> str:
@@ -850,6 +913,97 @@ async def namuwiki_tool(keyword: str) -> str:
 
     except Exception as e:
         return f"[오류 발생] 나무위키 요청 실패: {str(e)}"
+
+
+@tool
+async def stock_history_tool(
+    symbol: str,
+    period: Optional[str] = None,
+    interval: Optional[str] = "1d",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    auto_adjust: bool = True,
+    back_adjust: bool = False,
+    proxy: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    주식 히스토리를 조회합니다.
+
+    Args:
+        symbol: 조회할 티커 심볼 (예: 'AAPL', 'LUMN')
+        period: 조회 기간 (예: '1d','5d','1mo','1y','max' 등). start/end와 동시에 사용할 수 없습니다.
+        interval: 데이터 간격 (예: '1m','5m','1h','1d','1wk','1mo' 등)
+        start: 조회 시작일 (YYYY-MM-DD), period 없이 사용 시 필수
+        end: 조회 종료일 (YYYY-MM-DD), start와 함께 사용
+        auto_adjust: 배당·분할 이후 가격 자동 보정 여부
+        back_adjust: 과거 가격 보정 여부
+        proxy: 요청 시 사용할 프록시 URL (예: "http://proxy:8080")
+
+    Usage Examples:
+        # 1) 최근 5일치 일별 가격 조회
+        stock_history_tool(symbol="XXXX", period="5d", interval="1d")
+
+        # 2) 상장 첫날 가격만 조회 (start와 end 활용)
+        stock_history_tool(
+            symbol="XXXX",
+            start="2020-11-05",
+            end="2020-11-06",
+            interval="1d"
+        )
+
+        # 3) 특정 하루단위 조회 (어제)
+        stock_history_tool(
+            symbol="XXXX",
+            start="2025-06-06",
+            end="2025-06-07",
+            interval="1d"
+        )
+
+        # 4) 한 달치 주간 데이터 조회
+        stock_history_tool(symbol="XXXX", period="1mo", interval="1wk")
+    Returns:
+        A dict containing:
+        - "symbol": 요청한 심볼
+        - "history": 날짜별 OHLCV 리스트
+        - "info": 티커의 기본 메타정보 (company info)
+    """
+    # Ticker 객체 생성 (proxy는 yfinance 세션 레벨로 지원)
+    ticker = yf.Ticker(symbol, proxy=proxy) if proxy else yf.Ticker(symbol)
+
+    # 기간 vs 날짜 범위 조회
+    if period and not (start or end):
+        df = ticker.history(
+            period=period,
+            interval=interval,
+            auto_adjust=auto_adjust,
+            back_adjust=back_adjust
+        )
+    else:
+        df = ticker.history(
+            start=start,
+            end=end,
+            interval=interval,
+            auto_adjust=auto_adjust,
+            back_adjust=back_adjust
+        )
+
+    # DataFrame → 리스트 of dict
+    records: List[Dict[str, Any]] = []
+    for idx, row in df.iterrows():
+        records.append({
+            "date": idx.strftime("%Y-%m-%d %H:%M:%S"),
+            "open": float(row["Open"]),
+            "high": float(row["High"]),
+            "low": float(row["Low"]),
+            "close": float(row["Close"]),
+            "volume": int(row["Volume"])
+        })
+
+    return {
+        "symbol": symbol,
+        "history": records,
+        "info": ticker.info
+    }
 
 
 # ------------------------
@@ -1110,7 +1264,8 @@ tools = [
     generate_trend_report_tool,
     get_daily_news_trend_tool,
     keyword_news_search_tool,
-    get_stock_price,
+    namuwiki_tool,
+    stock_history_tool,
     generate_dalle3_enhanced
 ]
 
@@ -1136,7 +1291,7 @@ community_tools = [
 common_tools = [
     request_url_tool,
     translation_tool,
-    get_stock_price
+    stock_history_tool
 ]
 
 # @tool
