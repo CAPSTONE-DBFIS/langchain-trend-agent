@@ -2,6 +2,7 @@ import os
 import psycopg2
 from dotenv import load_dotenv
 from langchain_community.chat_message_histories import ChatMessageHistory
+from datetime import datetime
 
 # 환경 변수 로드
 load_dotenv()
@@ -74,4 +75,26 @@ def get_user_persona(member_id):
 
     except Exception as e:
         print(f"[ERROR] PostgreSQL에서 persona_preset 조회 중 오류 발생: {str(e)}")
-        return "당신은 친절하고 정확한 정보를 제공하는 AI입니다."  # 기본값
+        return "당신은 친절하고 정확한 정보를 제공하는 AI입니다."
+
+
+def save_chat_to_db(query: str, response: str, chat_room_id: int, member_id: str):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO chat_messages (message, response, chat_room_id, sender, created_at)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (query, response, chat_room_id, member_id, datetime.now())
+        )
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        print("[SAVED] chat message saved to DB")
+    except Exception as e:
+        print(f"[ERROR] Failed to save chat message: {str(e)}")
