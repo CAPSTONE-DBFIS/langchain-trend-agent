@@ -1,14 +1,18 @@
 import os
+import io
+import re
+import aiohttp
 import openai
+from urllib.parse import quote
+import requests
 import wikipedia
 from dotenv import load_dotenv
-import time
-import requests
-import re
-import io
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 from googleapiclient.discovery import build
+import matplotlib
+matplotlib.use('Agg')  # 백엔드 설정
+from fake_useragent import UserAgent
 from langchain.prompts import PromptTemplate
 from langchain.chat_models import ChatOpenAI
 from langchain.chains.llm import LLMChain
@@ -16,7 +20,6 @@ from langchain_community.tools import WikipediaQueryRun
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import WikipediaAPIWrapper
 from langchain.tools import tool
-from pytrends.request import TrendReq
 from typing import Union
 from app.utils.milvus_util import get_embedding_model, get_domestic_article_vector_store
 from app.utils.db_util import get_db_connection
@@ -39,45 +42,20 @@ from elasticsearch import Elasticsearch
 
 load_dotenv()
 
-@tool
-async def rag_news_search_tool(query: str) -> List[Dict[str, Union[str, float]]]:
+async def rag_news_search_tool(query: str, date_start: str, date_end: str) -> List[Dict[str, Union[str, float]]]:
     """
-    Milvus에서 RAG를 이용한 의미 기반 IT 뉴스 기사 검색 도구.
-
-    Milvus에 저장된 뉴스 기사 데이터에서 입력된 키워드와 의미상 가장 유사한 기사를 검색합니다.
-    최근 30일 내 등록된 문서를 우선 검색하며, 충분한 결과가 없을 경우 전체 데이터에서 추가 검색을 수행합니다.
-
-    Args:
-        query (str): 검색할 키워드
-
-    Returns:
-        List[Dict[str, Union[str, float]]]: 검색된 뉴스 기사 목록
-            - "title" (str): 기사 제목
-            - "date" (str): 기사 발행일
-            - "media_company" (str): 언론사 이름
-            - "url" (str): 기사 URL
-            - "score" (float): 유사도 점수
-
+    Milvus에서 RAG를 이용한 의미 기반 IT 뉴스 기사 검색 도구 (기간 필터 포함).
     """
-
-    # Embedding 모델 및 벡터 저장소 가져오기
     embedding_model = get_embedding_model()
     vector_store = get_domestic_article_vector_store()
 
     query_embedding = embedding_model.embed_query(query)
+    start_ts = int(datetime.strptime(date_start, "%Y-%m-%d").timestamp())
+    end_ts = int(datetime.strptime(date_end, "%Y-%m-%d").timestamp())
 
-    # 최신 문서 우선 검색 (최근 30일 내)
-    recent_timestamp = int(time.time()) - (30 * 86400)
-    latest_results = vector_store.similarity_search_with_score_by_vector(
-        query_embedding, k=5, filter={"timestamp": {"$gte": recent_timestamp}}
+    results = vector_store.similarity_search_with_score_by_vector(
+        query_embedding, k=3, filter={"timestamp": {"$gte": start_ts, "$lte": end_ts}}
     )
-
-    # 최신 문서가 부족하면 전체 검색 추가
-    if len(latest_results) < 5:
-        additional_results = vector_store.similarity_search_with_score_by_vector(query_embedding, k=5-len(latest_results))
-        combined_results = latest_results + [doc for doc in additional_results if doc not in latest_results]
-    else:
-        combined_results = latest_results
 
     return [
         {
@@ -88,8 +66,140 @@ async def rag_news_search_tool(query: str) -> List[Dict[str, Union[str, float]]]
             "url": doc.metadata["url"],
             "score": score
         }
-        for doc, score in combined_results
+        for doc, score in results
     ]
+
+
+async def keyword_news_search_tool(keyword: str, date_start: str, date_end: str) -> str:
+    """
+    Elasticsearch 뉴스 검색 도구 (기간 필터 포함).
+    """
+    es = Elasticsearch(
+        hosts=[f"http://{os.getenv('ELASTICSEARCH_HOST')}:{os.getenv('ELASTICSEARCH_PORT')}"],
+        basic_auth=(os.getenv("ELASTICSEARCH_USERNAME"), os.getenv("ELASTICSEARCH_PASSWORD")),
+        verify_certs=False
+    )
+
+    try:
+        must_clauses = [
+            {
+                "range": {
+                    "date": {
+                        "gte": f"{date_start}T00:00:00",
+                        "lte": f"{date_end}T23:59:59"
+                    }
+                }
+            }
+        ]
+
+        should_clauses = [
+            {"match": {"title": keyword}},
+            {"match": {"content": keyword}}
+        ]
+
+        query = {
+            "query": {
+                "bool": {
+                    "must": must_clauses,
+                    "should": should_clauses,
+                    "minimum_should_match": 1
+                }
+            },
+            "from": 0,
+            "size": 20
+        }
+
+        result = es.search(index=os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME"), body=query)
+        return json.dumps(result.body, ensure_ascii=False, indent=2)
+
+    except Exception as e:
+        return f"Elasticsearch 검색 실패: {str(e)}"
+
+
+@tool
+async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = None, date_end: str = None) -> list:
+    """
+    Elasticsearch + Milvus 병렬 하이브리드 네이버 IT 카테고리 뉴스 검색 도구
+
+    이 함수는 두 가지 방식의 뉴스 검색을 병렬로 수행합니다:
+
+    1. **Elasticsearch**: 키워드 기반의 문자열 검색
+    2. **Milvus (RAG)**: 임베딩 기반의 의미 유사도 검색 (질문 기반)
+
+    ### Args:
+    - query (str): 의미 기반 검색을 위한 질문 문장 (예: "AI가 기업 생산성에 미치는 영향은?")
+    - keyword (str): Elasticsearch용 주요 키워드 (예: "AI", "삼성", "반도체")
+    - date_start (str, optional): 검색 시작 날짜 (형식: YYYY-MM-DD). 지정하지 않으면 최근 30일 기준 자동 설정됨.
+    - date_end (str, optional): 검색 종료 날짜 (형식: YYYY-MM-DD). 지정하지 않으면 오늘 날짜 기준으로 자동 설정됨.
+
+    ### 결과 항목
+    - title: 기사 제목
+    - date: 발행일
+    - media_company: 언론사
+    - url: 기사 링크
+    - content: 본문 요약 or 전체 본문
+    - score: 점수 (ES의 경우 `_score`, Milvus의 경우 유사도 점수)
+    - source: "Elasticsearch" 또는 "Milvus"
+
+    ### 사용 시 주의사항
+    - **뉴스 기사는 매일 자정에 자동 크롤링 및 업데이트**됩니다.
+      - 따라서 가장 최신 기사는 **"현재 시간 기준 하루 전"**입니다.
+    - Elasticsearch는 **UTC 기준 날짜**로 저장되며, 한국 기준 하루 차이 날 수 있습니다.
+    - Milvus는 의미 기반으로 질문을 벡터화하여 유사한 문서를 검색하며, 날짜 필터는 적용되지만 의미 정확도는 질문 문장 품질에 따라 달라질 수 있습니다.
+    - 반환 결과는 `url` 기준 중복 제거 후, `score` 기준으로 정렬됩니다.
+
+    Returns:
+        list: 뉴스 기사 결과 목록 (최대 10~20개, 중복 제거됨)
+    """
+    try:
+        # 기본값: 최근 30일
+        if not date_start or not date_end:
+            today = datetime.utcnow().date()
+            date_start = (today - timedelta(days=180)).strftime("%Y-%m-%d")
+            date_end = today.strftime("%Y-%m-%d")
+
+        es_task = keyword_news_search_tool(keyword, date_start, date_end)
+        rag_task = rag_news_search_tool(query, date_start, date_end)
+
+        es_result_raw, rag_result = await asyncio.gather(es_task, rag_task)
+
+        es_results = json.loads(es_result_raw)
+        es_hits = es_results.get("hits", {}).get("hits", []) if isinstance(es_results, dict) else []
+
+        parsed_es = [
+            {
+                "title": item["_source"].get("title"),
+                "date": item["_source"].get("date"),
+                "media_company": item["_source"].get("media_company"),
+                "url": item["_source"].get("url"),
+                "content": item["_source"].get("content", ""),
+                "score": item.get("_score", 0),
+                "source": "Elasticsearch"
+            }
+            for item in es_hits
+        ]
+
+        parsed_rag = [
+            {
+                "title": item.get("title"),
+                "date": item.get("date"),
+                "media_company": item.get("media_company"),
+                "url": item.get("url"),
+                "content": item.get("content"),
+                "score": item.get("score", 0),
+                "source": "Milvus"
+            }
+            for item in rag_result
+        ]
+
+        combined = parsed_es + parsed_rag
+        unique_by_url = {item["url"]: item for item in combined}.values()
+        final_sorted = sorted(unique_by_url, key=lambda x: x.get("score", 0), reverse=True)
+
+        return list(final_sorted)
+
+    except Exception as e:
+        return [{"error": f"하이브리드 뉴스 검색 실패: {str(e)}"}]
 
 
 @tool
@@ -435,8 +545,7 @@ async def wikipedia_tool(query: str) -> str:
 
 
 @tool
-async def google_trending_tool(query: str, startDate: str = None, endDate: str = None) -> Dict[
-    str, Union[str, List[float], List[str]]]:
+async def google_trending_tool(query: str, startDate: str = None, endDate: str = None) -> Dict[str, Union[str, List[float], List[str]]]:
     """
     Google Trends 키워드 검색 도구.
 
@@ -454,51 +563,36 @@ async def google_trending_tool(query: str, startDate: str = None, endDate: str =
             - "dates" (List[str]): 해당 날짜 목록 (YYYY-MM-DD)
     """
     try:
-        # pytrends API 연결
+        from pytrends.request import TrendReq
+
         pytrends = TrendReq(hl="ko", tz=540)
 
-        # `timeframe` 설정: 만약 `startDate`와 `endDate`가 주어지면, 그 값을 사용
+        # 날짜 범위 설정
         if startDate and endDate:
-            timeframe = f"{startDate} {endDate}"  # 특정 날짜 범위
+            timeframe = f"{startDate} {endDate}"
         else:
-            timeframe = "today 1-m"  # 기본값: 최근 1개월
+            timeframe = "today 1-m"
 
-        # 최대 3번 재시도
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                # 검색 키워드, timeframe을 지정 설정
-                pytrends.build_payload([query], cat=0, timeframe=timeframe, geo="KR", gprop="")
+        # 요청
+        pytrends.build_payload([query], cat=0, timeframe=timeframe, geo="KR", gprop="")
 
-                # 관심도 데이터 가져오기
-                trend_data = pytrends.interest_over_time()
+        trend_data = pytrends.interest_over_time()
 
-                # 데이터 확인
-                if trend_data is None or trend_data.empty:
-                    return {"error": f"No trending data found for '{query}'."}
+        if trend_data is None or trend_data.empty:
+            return {"error": f"No trending data found for '{query}'."}
 
-                # 관심도 데이터, 날짜를 리스트에 담기
-                interest_data = trend_data[query].dropna().tolist()  # 관심도 데이터 리스트로 변환
-                dates = trend_data.index.strftime('%Y-%m-%d').tolist()  # 날짜를 리스트로 변환
+        interest_data = trend_data[query].dropna().tolist()
+        dates = trend_data.index.strftime('%Y-%m-%d').tolist()
 
-                return {
-                    "query": query,
-                    "interest_data": interest_data,
-                    "dates": dates
-                }
-
-            except Exception as e:
-                # 429 에러 발생 시, 10초 대기 후 재시도
-                if '429' in str(e):
-                    if attempt < max_retries - 1:
-                        print(f"Rate limit exceeded. Retrying in 5 seconds... (Attempt {attempt + 1}/{max_retries})")
-                        time.sleep(10)
-                    else:
-                        return {"error": "Maximum retries reached. Please try again later."}
-                else:
-                    return {"error": f"Error retrieving Google Trends data: {str(e)}"}
+        return {
+            "query": query,
+            "interest_data": interest_data,
+            "dates": dates
+        }
 
     except Exception as e:
+        if '429' in str(e):
+            return {"error": f"Rate limit exceeded for query '{query}'. Try again later."}
         return {"error": f"Error retrieving Google Trends data: {str(e)}"}
 
 
@@ -756,44 +850,6 @@ async def get_daily_news_trend_tool(date: str) -> str:
 
 
 @tool
-async def keyword_news_search_tool(keyword: str, date_start: str, date_end: str, related_keyword: str = "") -> str:
-    """
-    키워드와 연관 키워드가 포함된 네이버 뉴스 기사를 elastic search에서 검색하는 도구입니다.
-
-    ⚠️ 주의:
-        - 본 도구는 "오늘 날짜(오늘 00시 이후)" 기준 데이터는 사용할 수 없습니다.
-        - 뉴스 크롤링은 매일 자정(00:00) 기준으로 하루 단위 수집되므로,
-          가장 최근 사용 가능한 날짜는 "어제 날짜"입니다.
-
-    Args:
-        keyword (str): 주 검색 키워드 (예: "AI")
-        relatedKeyword (str): 연관 검색 키워드 (예: "삼성")
-        date (str): 검색 기준 날짜 (YYYY-MM-DD)
-        page (int, optional): 페이지 번호 (기본값: 0)
-
-    Returns:
-        str: 연관 기사 검색 결과 JSON 문자열 (오류 발생 시 오류 메시지 포함)
-    """
-
-    cache_key = f"news:{keyword}:{relatedKeyword}:{date}:{page}"
-    r = get_redis_client()
-    # redis 캐시 조회
-    cached = r.get(cache_key)
-    if cached:
-        return cached
-
-    try:
-        url = (f"http://localhost:8080/api/insight/related-search?"
-               f"keyword={keyword}&relatedKeyword={relatedKeyword}&date={date}&page={page}")
-        response = requests.get(url)
-        response.raise_for_status()
-        # redis 캐시 저장
-        r.set(cache_key, response.text)
-        return response.text
-    except Exception as e:
-        return f"Elasticsearch 검색 실패: {str(e)}"
-
-@tool
 async def stock_history_tool(
     symbol: str,
     period: Optional[str] = None,
@@ -881,35 +937,47 @@ async def namuwiki_tool(keyword: str) -> str:
     본문 텍스트 일부를 반환합니다. 나무위키는 크롤링을 통해 접근합니다.
 
     Args:
-        keyword (str): 검색 키워드 (예:'일론 머스크')
+        keyword (str): 검색 키워드
 
     Returns:
-        str: 요약된 나무위키 본문 (없거나 실패 시 오류 메시지)
+        str: 나무위키 본문 요약 텍스트 또는 오류 메시지
     """
 
     try:
         base_url = "https://namu.wiki"
-        search_url = f"{base_url}/w/{keyword.replace(' ', '%20')}"
-        headers = {"User-Agent": "Mozilla/5.0"}
+        encoded_keyword = quote(keyword)
+        headers = {"User-Agent": UserAgent().random}
 
-        response = requests.get(search_url, headers=headers, timeout=10)
-        response.raise_for_status()
+        async with aiohttp.ClientSession(headers=headers) as session:
+            # 1차 시도: 직접 문서 접근
+            direct_url = f"{base_url}/w/{encoded_keyword}"
+            async with session.get(direct_url, timeout=10) as response:
+                html = await response.text()
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        wiki_paragraphs = soup.find_all("div", class_="wiki-paragraph")
+            # HTML 파싱
+            soup = BeautifulSoup(html, "html.parser")
+            all_divs = soup.find_all("div")
 
-        if not wiki_paragraphs:
-            return f"'{keyword}'에 대한 나무위키 문서를 찾을 수 없습니다."
+            # 필터링 조건
+            irrelevant_keywords = [
+                "CC BY-NC-SA", "namu.wiki", "umanle S.R.L",
+                "Google Privacy Policy", "Términos de uso",
+                "문서 가져오기", "최근 수정 시각", "틀", "분류:"
+            ]
 
-        extracted = []
-        for para in wiki_paragraphs:
-            text = para.get_text(separator=" ", strip=True)
-            if text:
-                extracted.append(text)
-            if len(extracted) >= 5:  # 상위 5개 문단만 추출
-                break
+            extracted = []
+            seen = set()
 
-        return "\n\n".join(extracted) if extracted else "본문이 비어 있습니다."
+            for div in all_divs:
+                text = div.get_text(separator=" ", strip=True)
+                if (
+                    text and len(text) > 40 and text not in seen and
+                    not any(bad in text for bad in irrelevant_keywords)
+                ):
+                    extracted.append(text)
+                    seen.add(text)
+
+            return "\n\n".join(extracted[:30]) if extracted else "본문이 비어 있습니다."
 
     except Exception as e:
         return f"[오류 발생] 나무위키 요청 실패: {str(e)}"
@@ -1251,7 +1319,7 @@ def generate_dalle3_enhanced(prompt: str) -> str:
 
 
 tools = [
-    rag_news_search_tool,
+    hybrid_news_search_tool,
     daum_blog_tool,
     naver_blog_tool,
     reddit_tool,
@@ -1271,7 +1339,7 @@ tools = [
 
 # 도구 분류
 news_tools = [
-    rag_news_search_tool,
+    hybrid_news_search_tool,
     get_daily_news_trend_tool,
     keyword_news_search_tool,
     search_web_tool,
@@ -1293,144 +1361,3 @@ common_tools = [
     translation_tool,
     stock_history_tool
 ]
-
-# @tool
-# async def fintech_news_tool(keyword: str, max_results: int = 10) -> List[Dict[str, str]]:
-#     """핀테크 뉴스 검색 도구 (NewsAPI 및 RSS 대안)."""
-#     r = get_redis_client()
-#     cache_key = f"fintech_news:{keyword}:{max_results}"
-#     cached = r.get(cache_key)
-#     if cached:
-#         return json.loads(cached)
-#
-#     api_key = os.getenv("NEWSAPI_KEY")
-#     if api_key:
-#         url = f"https://newsapi.org/v2/everything?q={keyword}+fintech&apiKey={api_key}&language=en&sortBy=publishedAt"
-#         try:
-#             response = requests.get(url, timeout=10)
-#             response.raise_for_status()
-#             data = response.json()
-#             articles = data.get("articles", [])[:max_results]
-#             results = [
-#                 {
-#                     "title": article["title"],
-#                     "url": article["url"],
-#                     "description": article["description"] or "",
-#                     "published_at": article["publishedAt"]
-#                 }
-#                 for article in articles if article["title"]
-#             ]
-#             r.setex(cache_key, 3600, json.dumps(results))
-#             return results
-#         except Exception as e:
-#             print(f"NewsAPI 실패: {e}")
-#
-#     # RSS 대안 (Fintech Futures)
-#     try:
-#         rss_url = "https://fintechfutures.com/feed/"
-#         feed = feedparser.parse(rss_url)
-#         results = [
-#             {
-#                 "title": entry.title,
-#                 "url": entry.link,
-#                 "description": entry.summary or "",
-#                 "published_at": entry.published
-#             }
-#             for entry in feed.entries[:max_results] if keyword.lower() in entry.title.lower()
-#         ]
-#         r.setex(cache_key, 3600, json.dumps(results))
-#         return results
-#     except Exception as e:
-#         return [{"error": f"핀테크 뉴스 검색 실패: {str(e)}"}]
-#
-#
-# @tool
-# async def x_search_tool(keyword: str, max_results: int = 10) -> List[Dict[str, Union[str, int]]]:
-#     """X 플랫폼 포스트 검색 도구."""
-#     r = get_redis_client()
-#     cache_key = f"x_search:{keyword}:{max_results}"
-#     cached = r.get(cache_key)
-#     if cached:
-#         return json.loads(cached)
-#
-#     bearer_token = os.getenv("X_API_BEARER_TOKEN")
-#     if not bearer_token:
-#         print("X API Bearer Token이 설정되지 않았습니다. 웹 스크래핑 시도.")
-#         # 웹 스크래핑 대안 (법적 검토 필요)
-#         try:
-#             search_url = f"https://x.com/search?q={keyword}&src=typed_query"
-#             response = requests.get(search_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-#             response.raise_for_status()
-#             soup = BeautifulSoup(response.text, "html.parser")
-#             results = [
-#                 {
-#                     "text": "Sample post from X (scraped)",
-#                     "url": search_url,
-#                     "likes": 0,
-#                     "created_at": datetime.now().isoformat()
-#                 }
-#             ]
-#             r.setex(cache_key, 3600, json.dumps(results))
-#             return results
-#         except Exception as e:
-#             return [{"error": f"X 검색 실패: 스크래핑 실패: {str(e)}"}]
-#
-#     try:
-#         url = f"https://api.twitter.com/2/tweets/search/recent?query={keyword}&max_results={max_results}"
-#         headers = {"Authorization": f"Bearer {bearer_token}"}
-#         response = requests.get(url, headers=headers, timeout=10)
-#         response.raise_for_status()
-#         data = response.json()
-#         results = [
-#             {
-#                 "text": tweet["text"],
-#                 "url": f"https://x.com/i/status/{tweet['id']}",
-#                 "likes": tweet.get("public_metrics", {}).get("like_count", 0),
-#                 "created_at": tweet["created_at"]
-#             }
-#             for tweet in data.get("data", [])[:max_results]
-#         ]
-#         r.setex(cache_key, 3600, json.dumps(results))
-#         return results
-#     except Exception as e:
-#         return [{"error": f"X API 검색 실패: {str(e)}"}]
-#
-#
-# @tool
-# async def it_trends_google_trends_tool(query: str, startDate: str = None, endDate: str = None) -> Dict[
-#     str, Union[str, List[float], List[str]]]:
-#     """Google Trends 검색량 조회 도구."""
-#     r = get_redis_client()
-#     cache_key = f"google_trends:{query}:{startDate}:{endDate}"
-#     cached = r.get(cache_key)
-#     if cached:
-#         return json.loads(cached)
-#
-#     try:
-#         pytrends = TrendReq(hl="ko", tz=540)
-#         timeframe = f"{startDate} {endDate}" if startDate and endDate else "today 1-m"
-#         max_retries = 3
-#         for attempt in range(max_retries):
-#             try:
-#                 pytrends.build_payload([query], cat=0, timeframe=timeframe, geo="KR", gprop="")
-#                 trend_data = pytrends.interest_over_time()
-#                 if trend_data is None or trend_data.empty:
-#                     return {"error": f"No trending data found for '{query}'."}
-#                 interest_data = trend_data[query].dropna().tolist()
-#                 dates = trend_data.index.strftime('%Y-%m-%d').tolist()
-#                 results = {
-#                     "query": query,
-#                     "interest_data": interest_data,
-#                     "dates": dates
-#                 }
-#                 r.setex(cache_key, 86400, json.dumps(results))
-#                 return results
-#             except Exception as e:
-#                 if '429' in str(e) and attempt < max_retries - 1:
-#                     await asyncio.sleep(10)
-#                 else:
-#                     raise
-#     except Exception as e:
-#         return {"error": f"Google Trends 검색 실패: {str(e)}"}
-#
-#
