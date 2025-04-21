@@ -1,44 +1,44 @@
 import os
 import io
+import json
 import re
-import aiohttp
 import openai
+import asyncio
+from uuid import uuid4
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from typing import Optional, List, Dict, Any, Union
 from urllib.parse import quote
+import aiohttp
+
 import requests
 import wikipedia
+import yfinance as yf
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 from googleapiclient.discovery import build
+from docx import Document
+from docx.shared import Inches
 import matplotlib
 matplotlib.use('Agg')  # 백엔드 설정
+import matplotlib.pyplot as plt
 from fake_useragent import UserAgent
+from elasticsearch import Elasticsearch
+
 from langchain.prompts import PromptTemplate
 from langchain.chat_models import ChatOpenAI
 from langchain.chains.llm import LLMChain
+from langchain.tools import tool
 from langchain_community.tools import WikipediaQueryRun
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import WikipediaAPIWrapper
-from langchain.tools import tool
-from typing import Union
+from langchain_community.tools.reddit_search.tool import RedditSearchRun, RedditSearchSchema
+from langchain_community.utilities.reddit_search import RedditSearchAPIWrapper
+
 from app.utils.milvus_util import get_embedding_model, get_domestic_article_vector_store
 from app.utils.db_util import get_db_connection
 from app.utils.redis_util import get_redis_client
-import matplotlib
-matplotlib.use('Agg') # 백엔드에서 작업
-import matplotlib.pyplot as plt
-from uuid import uuid4
-from docx import Document
-from docx.shared import Inches
-import asyncio
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-import yfinance as yf
-from langchain_community.tools.reddit_search.tool import RedditSearchRun, RedditSearchSchema
-from langchain_community.utilities.reddit_search import RedditSearchAPIWrapper
-import json
-from typing import Optional, List, Dict, Any
-from elasticsearch import Elasticsearch
 
 load_dotenv()
 
