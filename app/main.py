@@ -6,20 +6,7 @@ from app.services.rag_service import save_file_to_milvus, delete_team_embedding
 from app.utils.milvus_util import connect_milvus
 import logging
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
-from langchain.agents import create_tool_calling_agent, AgentExecutor
-from langchain.memory import ConversationBufferMemory
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langchain.prompts import MessagesPlaceholder
-from langchain.callbacks.streaming_aiter import AsyncIteratorCallbackHandler
-from datetime import datetime
-import json
-
-from app.tools.tools import tools
-from app.utils.db_util import get_session_history, get_user_persona
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -29,7 +16,6 @@ load_dotenv()
 app = FastAPI()
 
 connect_milvus()
-
 
 @app.post("/agent/query")
 async def agent_query(request: Request):
