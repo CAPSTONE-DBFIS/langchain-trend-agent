@@ -106,7 +106,7 @@ async def keyword_news_search_tool(keyword: str, date_start: str, date_end: str)
                 }
             },
             "from": 0,
-            "size": 20
+            "size": 10
         }
 
         result = es.search(index=os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME"), body=query)
