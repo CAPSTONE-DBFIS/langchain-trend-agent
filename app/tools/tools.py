@@ -948,36 +948,39 @@ async def namuwiki_tool(keyword: str) -> str:
         encoded_keyword = quote(keyword)
         headers = {"User-Agent": UserAgent().random}
 
-        async with aiohttp.ClientSession(headers=headers) as session:
-            # 1차 시도: 직접 문서 접근
-            direct_url = f"{base_url}/w/{encoded_keyword}"
-            async with session.get(direct_url, timeout=10) as response:
-                html = await response.text()
+        # 직접 문서 접근
+        direct_url = f"{base_url}/w/{encoded_keyword}"
+        response = requests.get(direct_url, headers=headers, timeout=10)
+        html = response.text
 
-            # HTML 파싱
-            soup = BeautifulSoup(html, "html.parser")
-            all_divs = soup.find_all("div")
+        # 파싱
+        soup = BeautifulSoup(html, "html.parser")
+        all_divs = soup.find_all("div")
 
-            # 필터링 조건
-            irrelevant_keywords = [
-                "CC BY-NC-SA", "namu.wiki", "umanle S.R.L",
-                "Google Privacy Policy", "Términos de uso",
-                "문서 가져오기", "최근 수정 시각", "틀", "분류:"
-            ]
+        # 제거할 키워드 + 정규식 패턴 정의
+        irrelevant_keywords = [
+            "CC BY-NC-SA", "namu.wiki", "umanle S.R.L",
+            "Google Privacy Policy", "Términos de uso",
+            "문서 가져오기", "최근 수정 시각", "틀", "분류:",
+            "펼치기", "접기",
+            "편집 요청", "편집 권한이 부족합니다", "ACL 탭", "도움말"
+        ]
+        heading_pattern = re.compile(r"^\d+(\s*\.\s*\d+)*\s*\.")
 
-            extracted = []
-            seen = set()
+        extracted, seen = [], set()
+        for div in all_divs:
+            text = div.get_text(separator=" ", strip=True)
+            if (
+                text
+                and len(text) > 40
+                and text not in seen
+                and not any(bad in text for bad in irrelevant_keywords)
+                and not heading_pattern.match(text)
+            ):
+                extracted.append(text)
+                seen.add(text)
 
-            for div in all_divs:
-                text = div.get_text(separator=" ", strip=True)
-                if (
-                    text and len(text) > 40 and text not in seen and
-                    not any(bad in text for bad in irrelevant_keywords)
-                ):
-                    extracted.append(text)
-                    seen.add(text)
-
-            return "\n\n".join(extracted[:30]) if extracted else "본문이 비어 있습니다."
+        return "\n\n".join(extracted[:30]) if extracted else "본문이 비어 있습니다."
 
     except Exception as e:
         return f"[오류 발생] 나무위키 요청 실패: {str(e)}"
