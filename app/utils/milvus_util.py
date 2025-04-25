@@ -7,8 +7,7 @@ from pymilvus import connections
 # 환경 변수 로드
 load_dotenv()
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
+# os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 def connect_milvus():
     """Milvus 연결"""
