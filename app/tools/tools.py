@@ -3,15 +3,20 @@ import io
 import json
 import re
 import openai
+import time
 import asyncio
 from uuid import uuid4
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from dateutil import parser
+
 from zoneinfo import ZoneInfo
 from typing import Optional, List, Dict, Any, Union
 from urllib.parse import quote
 import aiohttp
+import logging
 
 import requests
+from requests.auth import HTTPBasicAuth
 import wikipedia
 import yfinance as yf
 from dotenv import load_dotenv
@@ -25,6 +30,7 @@ matplotlib.use('Agg')  # 백엔드 설정
 import matplotlib.pyplot as plt
 from fake_useragent import UserAgent
 from elasticsearch import Elasticsearch
+from functools import wraps
 
 from langchain.prompts import PromptTemplate
 from langchain.chat_models import ChatOpenAI
@@ -33,15 +39,30 @@ from langchain.tools import tool
 from langchain_community.tools import WikipediaQueryRun
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import WikipediaAPIWrapper
-from langchain_community.tools.reddit_search.tool import RedditSearchRun, RedditSearchSchema
-from langchain_community.utilities.reddit_search import RedditSearchAPIWrapper
 
 from app.utils.milvus_util import get_embedding_model, get_domestic_article_vector_store
 from app.utils.db_util import get_db_connection
 from app.utils.redis_util import get_redis_client
 
-load_dotenv()
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
+def async_time_logger(name: str):
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            result = await func(*args, **kwargs)
+            end = time.perf_counter()
+            logger.info(f"[{name}] 실행 시간: {(end - start):.3f}초")
+            return result
+        return wrapper
+    return decorator
+
+load_dotenv()
+KST = timezone(timedelta(hours=9))
+
+@async_time_logger("rag_news_search_tool")
 async def rag_news_search_tool(query: str, date_start: str, date_end: str) -> List[Dict[str, Union[str, float]]]:
     """
     Milvus에서 RAG를 이용한 의미 기반 IT 뉴스 기사 검색 도구 (기간 필터 포함).
@@ -54,7 +75,7 @@ async def rag_news_search_tool(query: str, date_start: str, date_end: str) -> Li
     end_ts = int(datetime.strptime(date_end, "%Y-%m-%d").timestamp())
 
     results = vector_store.similarity_search_with_score_by_vector(
-        query_embedding, k=3, filter={"timestamp": {"$gte": start_ts, "$lte": end_ts}}
+        query_embedding, k=5, filter={"timestamp": {"$gte": start_ts, "$lte": end_ts}}
     )
 
     return [
@@ -69,7 +90,7 @@ async def rag_news_search_tool(query: str, date_start: str, date_end: str) -> Li
         for doc, score in results
     ]
 
-
+@async_time_logger("keyword_news_search_tool")
 async def keyword_news_search_tool(keyword: str, date_start: str, date_end: str) -> str:
     """
     Elasticsearch 뉴스 검색 도구 (기간 필터 포함).
@@ -93,8 +114,7 @@ async def keyword_news_search_tool(keyword: str, date_start: str, date_end: str)
         ]
 
         should_clauses = [
-            {"match": {"title": keyword}},
-            {"match": {"content": keyword}}
+            {"match": {"title": keyword}}
         ]
 
         query = {
@@ -117,6 +137,7 @@ async def keyword_news_search_tool(keyword: str, date_start: str, date_end: str)
 
 
 @tool
+@async_time_logger("hybrid_news_search_tool")
 async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = None, date_end: str = None) -> list:
     """
     Elasticsearch + Milvus 병렬 하이브리드 네이버 IT 카테고리 뉴스 검색 도구
@@ -129,7 +150,7 @@ async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = No
     ### Args:
     - query (str): 의미 기반 검색을 위한 질문 문장 (예: "AI가 기업 생산성에 미치는 영향은?")
     - keyword (str): Elasticsearch용 주요 키워드 (예: "AI", "삼성", "반도체")
-    - date_start (str, optional): 검색 시작 날짜 (형식: YYYY-MM-DD). 지정하지 않으면 최근 30일 기준 자동 설정됨.
+    - date_start (str, optional): 검색 시작 날짜 (형식: YYYY-MM-DD). 지정하지 않으면 최근 365일 기준 자동 설정됨.
     - date_end (str, optional): 검색 종료 날짜 (형식: YYYY-MM-DD). 지정하지 않으면 오늘 날짜 기준으로 자동 설정됨.
 
     ### 결과 항목
@@ -152,10 +173,9 @@ async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = No
         list: 뉴스 기사 결과 목록 (최대 10~20개, 중복 제거됨)
     """
     try:
-        # 기본값: 최근 30일
         if not date_start or not date_end:
             today = datetime.utcnow().date()
-            date_start = (today - timedelta(days=180)).strftime("%Y-%m-%d")
+            date_start = (today - timedelta(days=365)).strftime("%Y-%m-%d")
             date_end = today.strftime("%Y-%m-%d")
 
         es_task = keyword_news_search_tool(keyword, date_start, date_end)
@@ -194,34 +214,33 @@ async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = No
 
         combined = parsed_es + parsed_rag
         unique_by_url = {item["url"]: item for item in combined}.values()
-        final_sorted = sorted(unique_by_url, key=lambda x: x.get("score", 0), reverse=True)
-
+        final_sorted = sorted(
+            unique_by_url,
+            key=lambda x: (0 if x["source"] == "Elasticsearch" else 1, -x["score"])
+        )
         return list(final_sorted)
 
     except Exception as e:
         return [{"error": f"하이브리드 뉴스 검색 실패: {str(e)}"}]
 
-
-@tool
-async def daum_blog_tool(keyword, max_results=10):
+@async_time_logger("search_daum_blogs")
+async def search_daum_blogs(keyword: str, max_results: int = 10) -> List[Dict[str, str]]:
     """
-    커뮤니티 트렌드 - Daum 블로그 검색 도구.
-
-    Daum 블로그 API를 사용하여 특정 키워드(keyword)와 관련된 블로그 게시글을 검색합니다.
+    Daum 블로그 게시글 검색 함수
 
     Args:
-        keyword (str): 검색할 키워드
-        max_results (int, optional): 최대 검색 결과 수 (기본값: 10)
+        keyword (str): 검색 키워드
+        max_results (int): 검색 결과 수 제한
 
     Returns:
-        List[Dict[str, str]]: 검색된 블로그 게시글 목록
-            - "title" (str): 게시글 제목
-            - "url" (str): 게시글 URL
-            - "contents" (str): 게시글 내용 요약
-            - "datetime" (str): 게시글 작성일 (ISO 형식)
+        List[Dict[str, str]]: 각 게시글에 대해 다음 필드를 포함한 딕셔너리 리스트
+            - title: 제목
+            - url: 링크
+            - contents: 본문 요약
+            - datetime: 작성일 (KST 기준, 'YYYY-MM-DD HH:MM' 형식)
+            - source: "daum"
     """
-
-    headers = {"Authorization": f"KakaoAK {os.getenv("DAUM_API_KEY")}"}
+    headers = {"Authorization": f"KakaoAK {os.getenv('DAUM_API_KEY')}"}
     params = {"query": keyword, "size": max_results, "sort": "accuracy"}
 
     try:
@@ -229,19 +248,18 @@ async def daum_blog_tool(keyword, max_results=10):
         response.raise_for_status()
         data = response.json()
 
-        results = [
+        return [
             {
                 "title": item["title"],
                 "url": item["url"],
                 "contents": item["contents"],
-                "datetime": item["datetime"]
+                "datetime": parser.parse(item["datetime"]).strftime("%Y-%m-%d %H:%M"),
+                "source": "daum"
             }
             for item in data.get("documents", [])
         ]
-        return results
-
-    except requests.exceptions.RequestException as e:
-        return {"error": f"Daum API 요청 실패: {str(e)}"}
+    except Exception as e:
+        raise RuntimeError(f"Daum API 오류: {str(e)}")
 
 
 def clean_html(text: str) -> str:
@@ -252,109 +270,141 @@ def clean_html(text: str) -> str:
     text = re.sub(r"&[^;]*;", "", text)  # HTML 엔티티 제거
     return text
 
-@tool
-async def naver_blog_tool(keyword: str, max_result: int = 10, days: int = 30) -> List[Dict[str, str]]:
+@async_time_logger("search_naver_blogs")
+async def search_naver_blogs(keyword: str, max_result: int = 10) -> List[Dict[str, str]]:
     """
-    커뮤니티 트렌드 - 네이버 블로그 검색 도구.
-
-    네이버 블로그에서 특정 키워드(keyword)로 최근 일정 기간(days) 내 게시된 글을 검색합니다.
+    Naver 블로그 검색 함수
 
     Args:
-        keyword (str): 검색할 키워드
-        max_result (int, optional): 최대 검색 결과 수 (기본값: 10)
-        days (int, optional): 검색할 기간 (최근 N일, 기본값: 30일)
+        keyword (str): 검색 키워드
+        max_result (int): 검색 결과 수 제한
 
     Returns:
-        List[Dict[str, str]]: 검색된 블로그 게시글 목록
-            - "title" (str): 게시글 제목
-            - "link" (str): 게시글 URL
-            - "description" (str): 게시글 요약
-            - "blogger_name" (str): 블로거 이름
-            - "post_date" (str): 게시일 (YYYYMMDD)
+        List[Dict[str, str]]: 각 게시글에 대해 다음 필드를 포함한 딕셔너리 리스트
+            - title: 제목
+            - url: 링크
+            - contents: 본문 요약
+            - datetime: 작성일 (KST 기준, 'YYYY-MM-DD HH:MM' 형식, 시간은 00:00 고정)
+            - source: "naver"
     """
-
     posts = []
-    cutoff_date = datetime.now() - timedelta(days=days)
 
     try:
-        display = min(max_result, 100)  # 네이버 API 최대 제한: 100
-        url = f"{os.getenv("NAVER_API_URL")}?query={keyword}&display={display}"
+        display = min(max_result, 100)
+        url = f"{os.getenv('NAVER_API_URL')}?query={keyword}&display={display}"
         headers = {
             "X-Naver-Client-Id": os.getenv("NAVER_CLIENT_ID"),
             "X-Naver-Client-Secret": os.getenv("NAVER_CLIENT_SECRET")
         }
 
         response = requests.get(url, headers=headers)
-        if response.status_code != 200:
-            raise Exception(f"네이버 API 호출 실패: {response.status_code}, {response.text}")
-
+        response.raise_for_status()
         data = response.json()
+
         for item in data.get("items", [])[:max_result]:
             post_date = datetime.strptime(item["postdate"], "%Y%m%d")
-
-            if post_date >= cutoff_date:
-                posts.append({
-                    "title": clean_html(item["title"]),
-                    "link": item["link"],
-                    "description": clean_html(item["description"]),
-                    "blogger_name": item["bloggername"],
-                    "post_date": item["postdate"]
-                })
-
-        # 최신순 정렬 후 max_result만큼 제한
-        posts = sorted(posts, key=lambda x: x["post_date"], reverse=True)[:max_result]
-
+            posts.append({
+                "title": clean_html(item["title"]),
+                "url": item["link"],
+                "contents": clean_html(item["description"]),
+                "datetime": post_date.strftime("%Y-%m-%d 00:00"),
+                "source": "naver"
+            })
+        return posts
     except Exception as e:
-        raise RuntimeError(f"네이버 블로그 검색 중 오류 발생: {str(e)}")
-
-    return posts
+        raise RuntimeError(f"Naver 블로그 검색 오류: {str(e)}")
 
 
-# Reddit API Wrapper 초기화
-reddit_client_wrapper = RedditSearchAPIWrapper(
-    reddit_client_id=os.getenv("REDDIT_CLIENT_ID"),
-    reddit_client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
-    reddit_user_agent="web:com.dbfis.chatbot:v1.0.0 (by /u/Hot_Mission1860)"
-)
+def get_reddit_access_token():
+    """
+    Reddit 액세스 토큰 발급
+    """
 
-# RedditSearchRun 인스턴스 생성
-reddit_search = RedditSearchRun(
-    api_wrapper=reddit_client_wrapper
-)
+    auth = HTTPBasicAuth(os.getenv("REDDIT_CLIENT_ID"), os.getenv("REDDIT_CLIENT_SECRET"))
+    headers = {
+        "User-Agent": "web:com.dbfis.chatbot:v1.0.0 (by /u/Hot_Mission1860)",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    data = {
+        "grant_type": "password",
+        "username": os.getenv("REDDIT_USERNAME"),
+        "password": os.getenv("REDDIT_PASSWORD")
+    }
+
+    response = requests.post("https://www.reddit.com/api/v1/access_token", headers=headers, auth=auth, data=data)
+
+    if response.status_code != 200:
+        raise Exception(f"Reddit OAuth 인증 실패: {response.json()}")
+
+    return response.json().get("access_token")
+
+@async_time_logger("search_reddit_posts")
+async def search_reddit_posts(keyword: str, max_result: int = 10) -> List[Dict[str, str]]:
+    try:
+        access_token = get_reddit_access_token()
+        headers = {
+            "Authorization": f"bearer {access_token}",
+            "User-Agent": "web:com.dbfis.chatbot:v1.0.0"
+        }
+        url = f"https://oauth.reddit.com/search?q={keyword}&limit={max_result}&sort=hot"
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            raise Exception(f"Reddit 검색 실패: {response.json()}")
+        data = response.json()
+        return [
+            {
+                "title": item["data"]["title"],
+                "url": f"https://www.reddit.com{item['data']['permalink']}",
+                "contents": item["data"].get("selftext", "").strip(),
+                "datetime": datetime.utcfromtimestamp(item["data"]["created_utc"]).replace(tzinfo=timezone.utc).astimezone(KST).strftime('%Y-%m-%d %H:%M'),
+                "source": "reddit"
+            }
+            for item in data.get("data", {}).get("children", [])
+        ]
+    except Exception as e:
+        raise RuntimeError(f"Reddit 검색 오류: {str(e)}")
+
 
 @tool
-async def reddit_tool(
-    keyword: str, sort: str = "hot", time_filter: str = "week", subreddit: str = "all", limit: str = "10") -> list:
+@async_time_logger("community_search_tool")
+async def community_search_tool(korean_keyword: str, english_keyword: str, platform: str = "all", max_results: int = 10) -> List[Dict[str, str]]:
     """
-    Reddit 인기 게시글 검색 도구.
+    커뮤니티 통합 검색 도구
 
-    주어진 키워드와 옵션에 따라 Reddit에서 인기 게시글을 비동기로 조회합니다.
+    필수 입력:
+    - korean_keyword (str): 블로그 검색용 한글 키워드 (Daum, Naver용)
+    - english_keyword (str): Reddit 검색용 영어 키워드 (Reddit용)
+
+    선택 입력:
+    - platform (str): "daum", "naver", "reddit", "all" 중 선택 (기본: all)
+    - max_results (int): 각 플랫폼별 최대 검색 결과 수 (기본: 10)
 
     Args:
-        keyword (str): 검색할 키워드.
-        sort (str, optional): 결과 정렬 기준. "hot", "new", "top" 중 하나. 기본값 "hot".
-        time_filter (str, optional): 검색 기간. "hour", "day", "week", "month", "year" 중 하나. 기본값 "week".
-        subreddit (str, optional): 검색할 서브레딧. 기본값 "all".
-        limit (str, optional): 조회할 최대 게시글 수. 반드시 문자열로 전달해야 하며, 기본값 "10".
+        korean_keyword (str): 한글 검색 키워드
+        english_keyword (str): 영어 검색 키워드
+        platform (str): "daum", "naver", "reddit", "all"
+        max_results (int): 각 플랫폼별 최대 검색 수
 
     Returns:
-        List[Dict[str, Union[str, int]]]:
-            - title (str): 게시글 제목
-            - url (str): 게시글 URL
-            - score (int): 추천(upvotes) 수
-            - created_utc (str): 게시글 작성 시각 (UTC)
+        List[Dict[str, str]]: 통합된 게시글 리스트
+            - title, url, contents, datetime (KST), source
     """
-    params = RedditSearchSchema(
-        query=keyword,
-        sort=sort,
-        time_filter=time_filter,
-        subreddit=subreddit,
-        limit=limit
-    )
-    # 비동기 호출
-    return await reddit_search.arun(tool_input=params.dict())
+    tasks = []
+    if platform in ["all", "daum"]:
+        tasks.append(search_daum_blogs(korean_keyword, max_results))
+    if platform in ["all", "naver"]:
+        tasks.append(search_naver_blogs(korean_keyword, max_results))
+    if platform in ["all", "reddit"]:
+        tasks.append(search_reddit_posts(english_keyword, max_results))
+
+    results_nested = await asyncio.gather(*tasks)
+    results = [item for sublist in results_nested for item in sublist]
+    return sorted(results, key=lambda x: x["datetime"], reverse=True)[:max_results * (3 if platform == "all" else 1)]
+
+
 
 @tool
+@async_time_logger("search_web_tool")
 async def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, str]]:
     """
     실시간 웹 검색 도구.
@@ -380,6 +430,7 @@ async def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, s
 
 
 @tool
+@async_time_logger("youtube_video_tool")
 async def youtube_video_tool(query: str, max_results: int = 5):
     """
     커뮤니티 트렌드 - YouTube 동영상 검색 도구.
@@ -426,6 +477,7 @@ async def youtube_video_tool(query: str, max_results: int = 5):
     return results
 
 @tool
+@async_time_logger("request_url_tool")
 async def request_url_tool(input_url: str) -> str | None:
     """
     웹페이지 또는 PDF 문서에서 텍스트를 추출하는 도구.
@@ -437,7 +489,7 @@ async def request_url_tool(input_url: str) -> str | None:
         input_url (str): 요청할 웹 페이지 또는 PDF 파일의 URL
 
     Returns:
-        str: 추출된 텍스트 (유의미하지 않을 경우 None 또는 경고 메시지)
+        str: 추출된 텍스트
     """
     headers = {
         "User-Agent": (
@@ -484,6 +536,7 @@ async def request_url_tool(input_url: str) -> str | None:
         return f"[처리 오류] {str(e)}"
 
 @tool
+@async_time_logger("translation_tool")
 async def translation_tool(asking: str) -> str:
     """
     ChatGPT를 이용한 번역 도구.
@@ -509,6 +562,7 @@ async def translation_tool(asking: str) -> str:
         return f"Error: {e}"
 
 @tool
+@async_time_logger("wikipedia_tool")
 async def wikipedia_tool(query: str) -> str:
     """
     Wikipedia 검색 도구.
@@ -545,6 +599,7 @@ async def wikipedia_tool(query: str) -> str:
 
 
 @tool
+@async_time_logger("google_trending_tool")
 async def google_trending_tool(query: str, startDate: str = None, endDate: str = None) -> Dict[str, Union[str, List[float], List[str]]]:
     """
     Google Trends 키워드 검색 도구.
@@ -597,10 +652,11 @@ async def google_trending_tool(query: str, startDate: str = None, endDate: str =
 
 
 @tool
+@async_time_logger("generate_trend_report_tool")
 async def generate_trend_report_tool(search_date: str = None) -> str:
     """
     트렌드 레포트 생성 도구.
-    DB에 저장된 날짜별 네이버 뉴스 상위 키워드를 기반으로 Milvus에서 관련 뉴스를 검색하고,
+    DB에 저장된 날짜별 네이버 IT 뉴스 상위 키워드를 기반으로 Milvus에서 관련 뉴스를 검색하고,
     GPT를 통해 종합적인 트렌드 분석 보고서를 생성합니다.
 
     ⚠️ 주의:
@@ -814,11 +870,12 @@ def upload_report_to_spring(file_path: str):
             raise Exception(f"Spring 업로드 실패: {response.status_code} {response.text}")
 
 @tool
+@async_time_logger("get_daily_news_trend_tool")
 async def get_daily_news_trend_tool(date: str) -> str:
     """
-    일간 트렌드 정보를 가져오는 도구.
+    Spring API를 이용해 일간 트렌드 정보를 가져오는 도구.
 
-    특정 날짜의 IT 뉴스 기사 상위 키워드와 각 키워드의 연관 키워드, 뉴스 기사 데이터를 가져옵니다.
+    특정 날짜의 네이버 IT 뉴스 기사 상위 키워드와 각 키워드의 연관 키워드, 뉴스 기사 데이터를 가져옵니다.
 
     ⚠️ 주의:
         - 본 도구는 "오늘 날짜(오늘 00시 이후)" 기준 데이터는 사용할 수 없습니다.
@@ -850,6 +907,7 @@ async def get_daily_news_trend_tool(date: str) -> str:
 
 
 @tool
+@async_time_logger("stock_history_tool")
 async def stock_history_tool(
     symbol: str,
     period: Optional[str] = None,
@@ -858,10 +916,9 @@ async def stock_history_tool(
     end: Optional[str] = None,
     auto_adjust: bool = True,
     back_adjust: bool = False,
-    proxy: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    주식 히스토리를 조회합니다.
+    주식 티커에 대한 히스토리를 조회하는 도구
 
     Args:
         symbol: 조회할 티커 심볼 (예: 'AAPL', 'LUMN')
@@ -871,7 +928,6 @@ async def stock_history_tool(
         end: 조회 종료일 (YYYY-MM-DD), start와 함께 사용
         auto_adjust: 배당·분할 이후 가격 자동 보정 여부
         back_adjust: 과거 가격 보정 여부
-        proxy: 요청 시 사용할 프록시 URL (예: "http://proxy:8080")
 
     Returns:
         {
@@ -890,8 +946,8 @@ async def stock_history_tool(
           "info": { ... }  # 회사 정보
         }
     """
-    # Ticker 객체 생성 (proxy는 yfinance 세션 레벨로 지원)
-    ticker = yf.Ticker(symbol, proxy=proxy) if proxy else yf.Ticker(symbol)
+    # Ticker 객체 생성
+    ticker = yf.Ticker(symbol)
 
     # 기간 vs 날짜 범위 조회
     if period and not (start or end):
@@ -929,6 +985,7 @@ async def stock_history_tool(
     }
 
 @tool
+@async_time_logger("namuwiki_tool")
 async def namuwiki_tool(keyword: str) -> str:
     """
     나무위키 검색 도구
@@ -948,12 +1005,12 @@ async def namuwiki_tool(keyword: str) -> str:
         encoded_keyword = quote(keyword)
         headers = {"User-Agent": UserAgent().random}
 
-        # 직접 문서 접근
+        # 직접 url 접근
         direct_url = f"{base_url}/w/{encoded_keyword}"
         response = requests.get(direct_url, headers=headers, timeout=10)
         html = response.text
 
-        # 파싱
+        # HTML 파싱
         soup = BeautifulSoup(html, "html.parser")
         all_divs = soup.find_all("div")
 
@@ -984,97 +1041,6 @@ async def namuwiki_tool(keyword: str) -> str:
 
     except Exception as e:
         return f"[오류 발생] 나무위키 요청 실패: {str(e)}"
-
-
-@tool
-async def stock_history_tool(
-    symbol: str,
-    period: Optional[str] = None,
-    interval: Optional[str] = "1d",
-    start: Optional[str] = None,
-    end: Optional[str] = None,
-    auto_adjust: bool = True,
-    back_adjust: bool = False,
-    proxy: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    주식 히스토리를 조회합니다.
-
-    Args:
-        symbol: 조회할 티커 심볼 (예: 'AAPL', 'LUMN')
-        period: 조회 기간 (예: '1d','5d','1mo','1y','max' 등). start/end와 동시에 사용할 수 없습니다.
-        interval: 데이터 간격 (예: '1m','5m','1h','1d','1wk','1mo' 등)
-        start: 조회 시작일 (YYYY-MM-DD), period 없이 사용 시 필수
-        end: 조회 종료일 (YYYY-MM-DD), start와 함께 사용
-        auto_adjust: 배당·분할 이후 가격 자동 보정 여부
-        back_adjust: 과거 가격 보정 여부
-        proxy: 요청 시 사용할 프록시 URL (예: "http://proxy:8080")
-
-    Usage Examples:
-        # 1) 최근 5일치 일별 가격 조회
-        stock_history_tool(symbol="XXXX", period="5d", interval="1d")
-
-        # 2) 상장 첫날 가격만 조회 (start와 end 활용)
-        stock_history_tool(
-            symbol="XXXX",
-            start="2020-11-05",
-            end="2020-11-06",
-            interval="1d"
-        )
-
-        # 3) 특정 하루단위 조회 (어제)
-        stock_history_tool(
-            symbol="XXXX",
-            start="2025-06-06",
-            end="2025-06-07",
-            interval="1d"
-        )
-
-        # 4) 한 달치 주간 데이터 조회
-        stock_history_tool(symbol="XXXX", period="1mo", interval="1wk")
-    Returns:
-        A dict containing:
-        - "symbol": 요청한 심볼
-        - "history": 날짜별 OHLCV 리스트
-        - "info": 티커의 기본 메타정보 (company info)
-    """
-    # Ticker 객체 생성 (proxy는 yfinance 세션 레벨로 지원)
-    ticker = yf.Ticker(symbol, proxy=proxy) if proxy else yf.Ticker(symbol)
-
-    # 기간 vs 날짜 범위 조회
-    if period and not (start or end):
-        df = ticker.history(
-            period=period,
-            interval=interval,
-            auto_adjust=auto_adjust,
-            back_adjust=back_adjust
-        )
-    else:
-        df = ticker.history(
-            start=start,
-            end=end,
-            interval=interval,
-            auto_adjust=auto_adjust,
-            back_adjust=back_adjust
-        )
-
-    # DataFrame → 리스트 of dict
-    records: List[Dict[str, Any]] = []
-    for idx, row in df.iterrows():
-        records.append({
-            "date": idx.strftime("%Y-%m-%d %H:%M:%S"),
-            "open": float(row["Open"]),
-            "high": float(row["High"]),
-            "low": float(row["Low"]),
-            "close": float(row["Close"]),
-            "volume": int(row["Volume"])
-        })
-
-    return {
-        "symbol": symbol,
-        "history": records,
-        "info": ticker.info
-    }
 
 
 # ------------------------
@@ -1162,7 +1128,7 @@ async def summarizer_tool(content: Any, source: str = "") -> str:
   
       문서 내용:
       {content}
-  """)
+    """)
     chain = LLMChain(llm=llm, prompt=prompt)
     return await chain.ainvoke({"content": content, "source": source})
 
@@ -1323,9 +1289,7 @@ def generate_dalle3_enhanced(prompt: str) -> str:
 
 tools = [
     hybrid_news_search_tool,
-    daum_blog_tool,
-    naver_blog_tool,
-    reddit_tool,
+    community_search_tool,
     search_web_tool,
     youtube_video_tool,
     request_url_tool,
@@ -1352,9 +1316,7 @@ news_tools = [
 ]
 
 community_tools = [
-    daum_blog_tool,
-    naver_blog_tool,
-    reddit_tool,
+    community_search_tool,
     youtube_video_tool,
     search_web_tool
 ]
