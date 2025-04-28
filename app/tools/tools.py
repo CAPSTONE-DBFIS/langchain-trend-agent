@@ -63,8 +63,8 @@ def async_time_logger(name: str):
 load_dotenv()
 KST = timezone(timedelta(hours=9))
 
-@async_time_logger("rag_news_search_tool")
-async def rag_news_search_tool(query: str, date_start: str, date_end: str) -> List[Dict[str, Union[str, float]]]:
+@async_time_logger("rag_news_search")
+async def rag_news_search(query: str, date_start: str, date_end: str) -> List[Dict[str, Union[str, float]]]:
     """
     Milvus에서 RAG를 이용한 의미 기반 IT 뉴스 기사 검색 도구 (기간 필터 포함).
     """
@@ -91,8 +91,8 @@ async def rag_news_search_tool(query: str, date_start: str, date_end: str) -> Li
         for doc, score in results
     ]
 
-@async_time_logger("keyword_news_search_tool")
-async def keyword_news_search_tool(keyword: str, date_start: str, date_end: str) -> str:
+@async_time_logger("keyword_news_search")
+async def es_news_search(keyword: str, date_start: str, date_end: str) -> str:
     """
     Elasticsearch 뉴스 검색 도구 (기간 필터 포함).
     """
@@ -179,8 +179,8 @@ async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = No
             date_start = (today - timedelta(days=365)).strftime("%Y-%m-%d")
             date_end = today.strftime("%Y-%m-%d")
 
-        es_task = keyword_news_search_tool(keyword, date_start, date_end)
-        rag_task = rag_news_search_tool(query, date_start, date_end)
+        es_task = es_news_search(keyword, date_start, date_end)
+        rag_task = rag_news_search(query, date_start, date_end)
 
         es_result_raw, rag_result = await asyncio.gather(es_task, rag_task)
 
@@ -729,7 +729,7 @@ async def wikipedia_tool(query: str) -> str:
 
 @tool
 @async_time_logger("google_trending_tool")
-async def google_trending_tool(query: str, startDate: str = None, endDate: str = None) -> Dict[str, Union[str, List[float], List[str]]]:
+async def google_trending_tool(query: str, start_date: str = None, end_date: str = None) -> Dict[str, Union[str, List[float], List[str]]]:
     """
     Google Trends 키워드 검색 도구.
 
@@ -737,8 +737,8 @@ async def google_trending_tool(query: str, startDate: str = None, endDate: str =
 
     Args:
         query (str): 검색할 키워드
-        startDate (str, optional): 검색 시작 날짜 (YYYY-MM-DD 형식, 기본값: 최근 1개월)
-        endDate (str, optional): 검색 종료 날짜 (YYYY-MM-DD 형식)
+        start_date (str, optional): 검색 시작 날짜 (YYYY-MM-DD 형식, 기본값: 최근 1개월)
+        end_date (str, optional): 검색 종료 날짜 (YYYY-MM-DD 형식)
 
     Returns:
         Dict[str, Union[str, List[float], List[str]]]: 트렌드 검색 결과
@@ -752,8 +752,8 @@ async def google_trending_tool(query: str, startDate: str = None, endDate: str =
         pytrends = TrendReq(hl="ko", tz=540)
 
         # 날짜 범위 설정
-        if startDate and endDate:
-            timeframe = f"{startDate} {endDate}"
+        if start_date and end_date:
+            timeframe = f"{start_date} {end_date}"
         else:
             timeframe = "today 1-m"
 
@@ -1377,7 +1377,6 @@ tools = [
     google_trending_tool,
     generate_trend_report_tool,
     get_daily_news_trend_tool,
-    keyword_news_search_tool,
     namuwiki_tool,
     stock_history_tool,
     generate_dalle3_enhanced,
@@ -1388,7 +1387,6 @@ tools = [
 news_tools = [
     hybrid_news_search_tool,
     get_daily_news_trend_tool,
-    keyword_news_search_tool,
     search_web_tool,
     wikipedia_tool,
     google_trending_tool,

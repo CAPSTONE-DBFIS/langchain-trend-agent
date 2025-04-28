@@ -1,6 +1,5 @@
 import asyncio
 
-from fastapi import Request
 from fastapi.responses import StreamingResponse
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_tool_calling_agent, AgentExecutor
@@ -47,7 +46,7 @@ class AgentChatService:
         return result.strip().replace('"', '')
 
     @staticmethod
-    async def stream_response(query: str, chat_room_id: str, member_id: int, persona_id: str) -> StreamingResponse:
+    async def stream_response(query: str, chat_room_id: int, member_id: str, persona_id: int) -> StreamingResponse:
         llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, streaming=True)
         memory = ConversationBufferMemory(
             return_messages=True,
@@ -62,7 +61,7 @@ class AgentChatService:
             async def summarize_and_rename():
                 try:
                     summarized_title = await AgentChatService.summarize_query_to_title(query)
-                    await update_chatroom_name_if_first(int(chat_room_id), member_id, summarized_title)
+                    await update_chatroom_name_if_first(chat_room_id, member_id, summarized_title)
                 except Exception as e:
                     logger.warning(f"[채팅방 이름 변경 실패] {e}")
 
@@ -182,8 +181,6 @@ class AgentChatService:
         Current date and time: {current_datetime}
         """
 
-        # Available tools: {", ".join([tool.name for tool in tools])}
-
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
             MessagesPlaceholder(variable_name="chat_history"),
@@ -259,6 +256,6 @@ class AgentChatService:
             async for chunk in event_generator():
                 yield chunk
             if final_response.strip():
-                save_chat_to_db(query=query, response=final_response, chat_room_id=chat_room_id, member_id=member_id)
+                save_chat_to_db(query=query, response=final_response, chat_room_id=str(chat_room_id), member_id=member_id)
 
         return StreamingResponse(streaming_with_db(), media_type="text/event-stream; charset=utf-8")
