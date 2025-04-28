@@ -65,22 +65,6 @@ class AgentChatService:
 
         final_response = ""
 
-        # 사용자 질의 후속 질문 파싱 함수
-        def parse_gpt_output(raw_output: str):
-            parts = raw_output.strip().split("다음 질문 추천:")
-            answer = parts[0].strip()
-            follow_ups = []
-
-            if len(parts) > 1:
-                follow_raw = parts[1].strip().split("\n")
-                for line in follow_raw:
-                    # '1. 질문내용', '2. 질문내용' 형태만 제거
-                    clean_line = re.sub(r'^\d+\.\s*', '', line).strip()
-                    if clean_line:
-                        follow_ups.append(clean_line)
-
-            return answer, follow_ups[:3]
-
         async def event_generator():
             nonlocal final_response
             final_sent = False
