@@ -9,6 +9,7 @@ from langchain.prompts import MessagesPlaceholder
 from langchain.callbacks.streaming_aiter import AsyncIteratorCallbackHandler
 from datetime import datetime
 import json
+import re
 
 from app.tools.tools import tools
 from app.utils.db_util import get_session_history, get_user_persona
