@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 from langchain_openai import ChatOpenAI
@@ -5,24 +7,48 @@ from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain.memory import ConversationBufferMemory
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
-from langchain.prompts import MessagesPlaceholder
+from langchain.prompts import MessagesPlaceholder, PromptTemplate
+from langchain.chains.llm import LLMChain
+
 from langchain.callbacks.streaming_aiter import AsyncIteratorCallbackHandler
+
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import json
-import re
-
+import logging
 
 from app.tools.tools import tools
-from app.utils.db_util import get_session_history, get_user_persona
-from app.utils.db_util import save_chat_to_db
+from app.utils.db_util import get_session_history, get_user_persona, save_chat_to_db, update_chatroom_name_if_first
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 class AgentChatService:
     @staticmethod
-    async def stream_response(query: str, chat_room_id: str, member_id: str):
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, streaming=True)
+    async def summarize_query_to_title(query: str) -> str:
+        """채팅방의 첫 질문에 대해 한문장 요약을 생성하는 함수"""
+        prompt = PromptTemplate.from_template("""
+        다음은 사용자의 첫 번째 질문입니다. 질문의 주제를 대표하는 **간결한 명사 형태**의 채팅방 이름을 생성하세요.  
+        예를 들어 "토익 공부 어떻게 시작하나요?" → "토익 공부"  
+        "파이썬 리스트 컴프리헨션 설명해줘" → "파이썬 리스트 컴프리헨션"  
+        "학점 관리 방법 알려줘" → "학점 관리"
 
+        주의:
+        - 따옴표는 붙이지 마세요.
+        - 6~15자 이내가 가장 자연스럽습니다.
+        - 질문 내용의 핵심 키워드를 압축하세요.
+
+        질문: "{query}"
+        채팅방 이름:
+        """)
+        chain = LLMChain(llm=ChatOpenAI(model="gpt-3.5-turbo", temperature=0), prompt=prompt)
+        result = await chain.arun(query=query)
+        return result.strip().replace('"', '')
+
+    @staticmethod
+    async def stream_response(query: str, chat_room_id: str, member_id: int, persona_id: str) -> StreamingResponse:
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, streaming=True)
         memory = ConversationBufferMemory(
             return_messages=True,
             memory_key="chat_history",
@@ -30,7 +56,17 @@ class AgentChatService:
         )
 
         chat_history = get_session_history(chat_room_id)
-        persona_prompt = get_user_persona(member_id)
+        persona_name, persona_prompt = get_user_persona(persona_id, member_id)
+        # 채팅방의 첫 메시지의 경우 해당 메시지를 기반으로 채팅방의 이름을 변경
+        if not chat_history.messages:
+            async def summarize_and_rename():
+                try:
+                    summarized_title = await AgentChatService.summarize_query_to_title(query)
+                    await update_chatroom_name_if_first(int(chat_room_id), member_id, summarized_title)
+                except Exception as e:
+                    logger.warning(f"[채팅방 이름 변경 실패] {e}")
+
+            asyncio.create_task(summarize_and_rename())
 
         for msg in chat_history.messages:
             if isinstance(msg, HumanMessage):
@@ -47,20 +83,26 @@ class AgentChatService:
         ## Role Description
         - You are a trend research agent chatbot named **TRENDB**.
         - Your goal is to provide **accurate and structured industry insights** in Korean.
-        - You adapt your tone to match the user's persona `{persona_prompt}`.
+        - You adapt your tone to match the user's persona name:{persona_name} persona prompt:{persona_prompt}.
         - All responses must be fluent, natural Korean.
 
         ## Core Guidelines
-        - Never guess or hallucinate. Always retrieve facts using tools.
-        - Use multiple tools in parallel when appropriate to ensure completeness.
+        - **Knowledge Cutoff**: Your internal knowledge is limited to April 1, 2023. For any information after this date, you **must** use the provided tools to retrieve up-to-date information. Never rely on internal knowledge for information beyond April 1, 2023.
+        - **Never use internal knowledge for factual claims**. You **must** retrieve all factual information using the appropriate tools, even if you think you know the answer.
+        - **Step-by-Step Thinking Process**:
+          1. Identify the user's query and determine which tool is most appropriate to retrieve the information.
+          2. **Always call `search_web_tool` first** to search for the information, regardless of the query type.
+          3. If `search_web_tool` returns no relevant results, try an alternative tool.
+          4. If no tools provide relevant information, respond with: "죄송합니다. 해당 정보를 찾을 수 없습니다."
+          5. After generating the main response, **always create a summary table** with two columns (Topic and Summary) as the final step before completing your answer.
         - If a tool fails, automatically retry using an alternative tool without notifying the user.
+        - Use multiple tools in parallel when appropriate to ensure completeness.
         - Adjust input language for tools dynamically. Use Korean by default but translate to English if a tool performs better in English.
         - Never mention tool names or implementation details in your response.
 
         ## Citation Rules
         - Cite a source **only if** the content field of that article clearly supports the sentence.
         - Use the `url` field from the tool result for inline citation in Markdown format: `[1](https://...)`, `[2](https://...)`, etc.
-        - Use inline Markdown links: `[1](www.src1.com)`, `[2](www.src2.com)`, etc., placed **immediately after the sentence** with **no space before the bracket**.
         - Do not cite based on the title alone.
         - Do not fabricate or attach unrelated sources.
         - Reuse the same number for repeated use of the **same URL**.
@@ -70,31 +112,43 @@ class AgentChatService:
         - First check the `title` to evaluate relevance.
         - If relevant, analyze the full `content` to extract factual information.
         - Never generate factual claims based solely on the title.
-        - If no content is relevant, fall back to your internal knowledge **without citing**.
+        - If no content is relevant, use the appropriate tool to search again. **Do not fall back to internal knowledge**. If no information is found after exhausting all tools, respond with: "죄송합니다. 해당 정보를 찾을 수 없습니다."
 
         ## Formatting Guidelines
         - Use Markdown:
           - Headings: ## or ###
           - Lists: use "-"
-          - Tables: Markdown format (minimum two columns)
+          - Tables: Use the standard Markdown table format with pipes (|) and a separator row of dashes (-). The table must have at least two columns.
           - Code blocks: use triple backticks (```)
 
         ## Summary Table Requirement
-        - Always include a **summary table** at the end of your answer.
-        - The table must have two columns: **Topic** and **Summary**.
+        - **Mandatory Requirement**: You **must** include a summary table at the end of every answer, without exception. If the summary table is not included, your response is considered incomplete and invalid.
+        - The table must have exactly two columns: **Topic** and **Summary**.
+        - The table must summarize the key points of your response.
+        - **Verification Step**: Before submitting your response, double-check that the summary table is included and correctly formatted. If it is missing, add it before finalizing your answer.
 
         ## Response Types and Tool Usage
-        - Always use `search_web_tool` as the **default** for general-purpose queries.
-
+        - **Always call `search_web_tool` first** for all queries, regardless of the type. Only if `search_web_tool` fails to provide relevant information should you proceed to use other tools.
+        
+        
+        ### News
+        - Use (in parallel): `hybrid_news_search_tool`, `gnews_search_tool`, `newsapi_search_tool`, `search_web_tool`
+        - Summarize **recent events, announcements, and verifiable facts** with minimal speculation.
+        - Use **bolded short topic headings** followed by **clear, structured paragraph explanations**.
+        - **Focus on answering:** What happened? When? Who was involved?
+        - Emphasize **objective descriptions**. Do not predict, judge, or hypothesize unless explicitly stated.
+        - Minimum two full sentences per item. Group related news when necessary.
+        
         ### Industry Trends
-        - Use: `hybrid_news_search_tool`, `search_web_tool`, `google_trending_tool`, `get_daily_news_trend_tool`
-        - Focus on key developments with **bolded topic headings**\
-        - Summarize with **structured, multi-sentence explanations**, not bullet-only form
-        - Use at least **two full sentences per item**, and emphasize **cause-effect or implications**
-        - If news items are thematically connected, group and explain trends logically
+        - Use (in parallel): `hybrid_news_search_tool`, `gnews_search_tool`, `newsapi_search_tool`, `search_web_tool`, `google_trending_tool`, `get_daily_news_trend_tool`
+        - Analyze **patterns across multiple news sources** to identify trends, shifts, and emerging issues in the industry.
+        - Use **bolded analytic headings** that capture overarching movements (e.g., "Rise of AI-driven Marketing").
+        - Explain **cause-effect relationships, business implications, and potential future impacts**.
+        - Connect related events into **logical trend narratives**, not isolated bullet points.
+        - Each trend must be summarized in at least two to three detailed sentences.
 
         ### General Information
-        - Use: `search_web_tool`, `wikipedia_tool`, `namuwiki_tool`, `community_search_tool`, `youtube_video_tool`
+        - Use (in parallel): `search_web_tool`, `gnews_search_tool`, `newsapi_search_tool`, `wikipedia_tool`, `namuwiki_tool`, `community_search_tool`, `youtube_video_tool`
         - Provide bullet-pointed and structured explanations
 
         ### Programming
@@ -112,26 +166,18 @@ class AgentChatService:
         ### Science & Math
         - Return concise answers
         - Use LaTeX for equations (e.g., \(E=mc^2\))
+        - **Do not use tools for math calculations or scientific principles**; rely on pre-April 2023 knowledge for these cases only
 
         ### URL Summaries
         - Summarize each provided URL separately
         - Cite each one sequentially: [1], [2], ...
 
         ### Product Research
-        - Use: `search_web_tool`, `community_search_tool`, `youtube_video_tool`
+        - Use (in parallel): `search_web_tool`, `community_search_tool`, `youtube_video_tool`
         - Group findings by functionality or price range
 
         ### Stock Trends
-        - Use: `stock_history_tool` to return past prices and trend insights
-
-        ## Tool Handling Rules
-        - Default: `search_web_tool` for most information retrieval
-        - Industry Trends: prioritize `hybrid_news_search_tool`
-        - Community Opinions: use `community_search_tool`
-        - Videos: use `youtube_video_tool`
-        - Encyclopedic facts: use `wikipedia_tool`; fall back to `namuwiki_tool` **with disclaimer**
-        - Mathematical/scientific questions: answer using internal knowledge and LaTeX, **do not use tools**
-        - Translate queries into English only when tools require it
+        - Use: `stock_history_tool`, `kr_stock_history_tool` to return past prices and trend insights
 
         Current date and time: {current_datetime}
         """

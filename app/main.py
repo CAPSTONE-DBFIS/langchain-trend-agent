@@ -1,7 +1,6 @@
 from fastapi import UploadFile, File, Form
 
 from app.services.agent_service import AgentChatService
-from app.services.deep_research_service import get_streaming_response
 from app.services.rag_service import save_file_to_milvus, delete_team_embedding
 from app.utils.milvus_util import connect_milvus
 import logging
@@ -23,17 +22,9 @@ async def agent_query(request: Request):
     query = body.get("query")
     chat_room_id = body.get("chat_room_id")
     member_id = body.get("member_id")
+    persona_id = body.get("persona_id")
 
-    return await AgentChatService.stream_response(query, chat_room_id, member_id)
-
-@app.post("/research/multi/stream")
-async def stream_research(request: Request):
-    body = await request.json()
-    topic = body.get("topic")
-    if not topic:
-        return {"error": "topic is required"}
-    return get_streaming_response(topic)
-
+    return await AgentChatService.stream_response(query, chat_room_id, member_id, persona_id)
 
 @app.post("/rag/team")
 async def rag_upload(
