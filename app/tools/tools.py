@@ -31,6 +31,7 @@ import matplotlib.pyplot as plt
 from fake_useragent import UserAgent
 from elasticsearch import Elasticsearch
 from functools import wraps
+import FinanceDataReader as fdr
 
 from langchain.prompts import PromptTemplate
 from langchain.chat_models import ChatOpenAI
@@ -222,6 +223,134 @@ async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = No
 
     except Exception as e:
         return [{"error": f"하이브리드 뉴스 검색 실패: {str(e)}"}]
+
+@tool
+@async_time_logger("gnews_search_tool")
+async def gnews_search_tool(query: str, lang: str = "en", country: str = "en", max_results: int = 10) -> List[Dict[str, str]]:
+    """
+    GNews API를 사용하여 해외 최신 뉴스를 검색하는 도구.
+
+    Args:
+        query (str): 검색할 영문 키워드 (예: "AI")
+        lang (str, optional): 뉴스 언어 (기본값: "en")
+        country (str, optional): 뉴스 지역 (기본값: "en")
+        max_results (int, optional): 최대 검색 결과 수 (기본값: 10, GNews 최대 100)
+
+    Returns:
+        List[Dict[str, str]]: 뉴스 기사 목록
+            - title: 기사 제목
+            - date: 발행일 (YYYY-MM-DD HH:MM 형식, KST 기준)
+            - media_company: 언론사
+            - url: 기사 링크
+            - content: 기사 요약 (description)
+            - source: "GNews"
+    """
+    try:
+        # GNews API 요청 URL 구성
+        api_key = os.getenv("GNEWS_API_KEY")  # .env 파일에 GNEWS_API_KEY 추가 필요
+        if not api_key:
+            return [{"error": "GNews API 키가 설정되지 않았습니다. .env 파일에 GNEWS_API_KEY를 추가하세요."}]
+
+        max_results = min(max_results, 100)  # GNews API 최대 결과 수 제한
+        url = (
+            f"https://gnews.io/api/v4/search?"
+            f"q={quote(query)}&lang={lang}&country={country}&max={max_results}&apikey={api_key}"
+        )
+
+        # API 호출
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(f"GNews API 요청 실패: {response.status} - {error_text}")
+                data = await response.json()
+
+        # 응답 데이터 확인
+        articles = data.get("articles", [])
+        if not articles:
+            return [{"error": f"'{query}'에 대한 최신 뉴스를 찾을 수 없습니다."}]
+
+        # GNews 응답을 LangChain 도구 형식으로 변환
+        parsed_articles = []
+        for article in articles:
+            published_at = parser.parse(article["publishedAt"]).astimezone(KST).strftime("%Y-%m-%d %H:%M")
+            parsed_articles.append({
+                "title": article["title"],
+                "date": published_at,
+                "media_company": article["source"]["name"],
+                "url": article["url"],
+                "content": article["description"],
+                "source": "GNews"
+            })
+
+        return parsed_articles
+
+    except Exception as e:
+        return [{"error": f"GNews 검색 실패: {str(e)}"}]
+
+
+@tool
+@async_time_logger("newsapi_search_tool")
+async def newsapi_search_tool(query: str, lang: str = "en", max_results: int = 10) -> List[Dict[str, str]]:
+    """
+    NewsAPI를 사용하여 해외 최신 뉴스를 검색하는 도구.
+
+    Args:
+        query (str): 검색할 영문 키워드 (예: "AI")
+        lang (str, optional): 뉴스 언어 (기본값: "en")
+        max_results (int, optional): 최대 검색 결과 수 (기본값: 10, NewsAPI 최대 100)
+
+    Returns:
+        List[Dict[str, str]]: 뉴스 기사 목록
+            - title: 기사 제목
+            - date: 발행일 (YYYY-MM-DD HH:MM 형식, KST 기준)
+            - media_company: 언론사
+            - url: 기사 링크
+            - content: 기사 요약 (description)
+            - source: "NewsAPI"
+    """
+    try:
+        # NewsAPI 요청 URL 구성
+        api_key = os.getenv("NEWS_API_KEY")  # .env 파일에 NEWSAPI_KEY 추가 필요
+        if not api_key:
+            return [{"error": "NewsAPI 키가 설정되지 않았습니다. .env 파일에 NEWS_API_KEY를 추가하세요."}]
+
+        max_results = min(max_results, 100)  # NewsAPI 최대 결과 수 제한
+        url = (
+            f"https://newsapi.org/v2/everything?"
+            f"q={quote(query)}&language={lang}&sortBy=publishedAt&pageSize={max_results}&apiKey={api_key}"
+        )
+
+        # API 호출
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(f"NewsAPI 요청 실패: {response.status} - {error_text}")
+                data = await response.json()
+
+        # 응답 데이터 확인
+        articles = data.get("articles", [])
+        if not articles:
+            return [{"error": f"'{query}'에 대한 최신 뉴스를 찾을 수 없습니다."}]
+
+        # NewsAPI 응답을 LangChain 도구 형식으로 변환
+        parsed_articles = []
+        for article in articles:
+            published_at = parser.parse(article["publishedAt"]).astimezone(KST).strftime("%Y-%m-%d %H:%M")
+            parsed_articles.append({
+                "title": article["title"],
+                "date": published_at,
+                "media_company": article["source"]["name"],
+                "url": article["url"],
+                "content": article["description"] or article["content"] or "",
+                "source": "NewsAPI"
+            })
+
+        return parsed_articles
+
+    except Exception as e:
+        return [{"error": f"NewsAPI 검색 실패: {str(e)}"}]
 
 @async_time_logger("search_daum_blogs")
 async def search_daum_blogs(keyword: str, max_results: int = 10) -> List[Dict[str, str]]:
@@ -943,46 +1072,196 @@ async def stock_history_tool(
             },
             ...
           ],
-          "info": { ... }  # 회사 정보
+          "info": { ... },  # 회사 정보
+          "status": "success" or "failed",
+          "message": 실패 시 실패 메시지 (성공 시 null)
         }
     """
-    # Ticker 객체 생성
-    ticker = yf.Ticker(symbol)
-
-    # 기간 vs 날짜 범위 조회
-    if period and not (start or end):
-        df = ticker.history(
-            period=period,
-            interval=interval,
-            auto_adjust=auto_adjust,
-            back_adjust=back_adjust
-        )
-    else:
-        df = ticker.history(
-            start=start,
-            end=end,
-            interval=interval,
-            auto_adjust=auto_adjust,
-            back_adjust=back_adjust
-        )
-
-    # DataFrame → 리스트 of dict
-    records: List[Dict[str, Any]] = []
-    for idx, row in df.iterrows():
-        records.append({
-            "date": idx.strftime("%Y-%m-%d %H:%M:%S"),
-            "open": float(row["Open"]),
-            "high": float(row["High"]),
-            "low": float(row["Low"]),
-            "close": float(row["Close"]),
-            "volume": int(row["Volume"])
-        })
-
-    return {
+    # 기본 응답 구조
+    response = {
         "symbol": symbol,
-        "history": records,
-        "info": ticker.info
+        "history": [],
+        "info": {},
+        "status": "failed",
+        "message": None
     }
+
+    # 티커 심볼 검증
+    if not symbol or not symbol.strip():
+        response["message"] = "티커 심볼이 비어 있습니다."
+        return response
+
+    try:
+        # Ticker 객체 생성
+        ticker = yf.Ticker(symbol)
+
+        # 기간 vs 날짜 범위 조회
+        if period and not (start or end):
+            df = ticker.history(
+                period=period,
+                interval=interval,
+                auto_adjust=auto_adjust,
+                back_adjust=back_adjust
+            )
+        else:
+            if not start or not end:
+                response["message"] = "start와 end 날짜를 모두 지정해야 합니다."
+                return response
+            df = ticker.history(
+                start=start,
+                end=end,
+                interval=interval,
+                auto_adjust=auto_adjust,
+                back_adjust=back_adjust
+            )
+
+        # 데이터가 비어 있는 경우 처리
+        if df.empty:
+            response["message"] = f"티커 '{symbol}'에 대한 데이터를 가져올 수 없습니다. 티커 심볼이 올바른지 확인하세요."
+            return response
+
+        # DataFrame → 리스트 of dict
+        records: List[Dict[str, Any]] = []
+        for idx, row in df.iterrows():
+            records.append({
+                "date": idx.strftime("%Y-%m-%d %H:%M:%S"),
+                "open": float(row["Open"]),
+                "high": float(row["High"]),
+                "low": float(row["Low"]),
+                "close": float(row["Close"]),
+                "volume": int(row["Volume"])
+            })
+
+        # ticker.info 안전하게 가져오기
+        try:
+            info = ticker.info or {}
+        except Exception as e:
+            print(f"회사 정보 가져오기 실패 ({symbol}): {str(e)}")
+            info = {}
+
+        # 성공 응답
+        response.update({
+            "history": records,
+            "info": info,
+            "status": "success",
+            "message": None
+        })
+        return response
+
+    except Exception as e:
+        response["message"] = f"주식 데이터를 가져오는 데 실패했습니다: {str(e)}"
+        return response
+
+@tool
+@async_time_logger("kr_stock_history_tool")
+async def kr_stock_history_tool(
+    symbol: str,
+    period: Optional[str] = None,
+    interval: Optional[str] = "1d",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    한국 주식 티커에 대한 히스토리를 조회하는 도구
+
+    Args:
+        symbol: 조회할 티커 심볼 (예: '017670' for SK텔레콤)
+        period: 조회 기간 (예: '1d','5d','1mo','1y','max' 등). start/end와 동시에 사용할 수 없습니다.
+        interval: 데이터 간격 (현재는 '1d'만 지원)
+        start: 조회 시작일 (YYYY-MM-DD), period 없이 사용 시 필수
+        end: 조회 종료일 (YYYY-MM-DD), start와 함께 사용
+
+    Returns:
+        {
+          "symbol": symbol,
+          "history": [  # 날짜별 OHLCV 리스트
+            {
+              "date": "2025-04-24",
+              "open": 123.45,
+              "high": 125.00,
+              "low": 122.80,
+              "close": 124.10,
+              "volume": 987654
+            },
+            ...
+          ],
+          "info": {},  # 회사 정보 (미지원)
+          "status": "success" or "failed",
+          "message": 실패 시 실패 메시지 (성공 시 null)
+        }
+    """
+    # 기본 응답 구조
+    response = {
+        "symbol": symbol,
+        "history": [],
+        "info": {},  # FinanceDataReader는 회사 정보를 제공하지 않음
+        "status": "failed",
+        "message": None
+    }
+
+    # 티커 심볼 검증
+    if not symbol or not symbol.strip():
+        response["message"] = "티커 심볼이 비어 있습니다."
+        return response
+
+    # FinanceDataReader는 interval을 직접 지원하지 않으므로 1d로 고정
+    if interval != "1d":
+        response["message"] = "현재는 '1d' 간격만 지원합니다."
+        return response
+
+    try:
+        # 날짜 설정
+        if period and not (start or end):
+            # period를 날짜 범위로 변환 (간단히 max로 설정 후 필터링)
+            df = fdr.DataReader(symbol, start='2000-01-01', end=datetime.now().strftime('%Y-%m-%d'))
+            # period에 따라 필터링 (예: '1d' → 최근 1일)
+            if period == '1d':
+                df = df.tail(1)
+            elif period == '5d':
+                df = df.tail(5)
+            elif period == '1mo':
+                df = df.tail(30)
+            elif period == '1y':
+                df = df.tail(365)
+            elif period == 'max':
+                pass  # 이미 전체 데이터
+            else:
+                response["message"] = f"지원하지 않는 period 값입니다: {period}"
+                return response
+        else:
+            if not start or not end:
+                response["message"] = "start와 end 날짜를 모두 지정해야 합니다."
+                return response
+            df = fdr.DataReader(symbol, start=start, end=end)
+
+        # 데이터가 비어 있는 경우 처리
+        if df.empty:
+            response["message"] = f"티커 '{symbol}'에 대한 데이터를 가져올 수 없습니다. 티커 심볼이 올바른지 확인하세요."
+            return response
+
+        # DataFrame → 리스트 of dict
+        records: List[Dict[str, Any]] = []
+        for idx, row in df.iterrows():
+            records.append({
+                "date": idx.strftime("%Y-%m-%d"),
+                "open": float(row["Open"]),
+                "high": float(row["High"]),
+                "low": float(row["Low"]),
+                "close": float(row["Close"]),
+                "volume": int(row["Volume"])
+            })
+
+        # 성공 응답
+        response.update({
+            "history": records,
+            "status": "success",
+            "message": None
+        })
+        return response
+
+    except Exception as e:
+        response["message"] = f"주식 데이터를 가져오는 데 실패했습니다: {str(e)}"
+        return response
 
 @tool
 @async_time_logger("namuwiki_tool")
@@ -1042,207 +1321,6 @@ async def namuwiki_tool(keyword: str) -> str:
     except Exception as e:
         return f"[오류 발생] 나무위키 요청 실패: {str(e)}"
 
-
-# ------------------------
-# Deep Research 단계별 툴
-# ------------------------
-@tool
-async def planner_tool(topic: str, steps: int = 3) -> List[Dict[str, Any]]:
-    """
-    사용자의 주제에 대한 질문, 키워드 및 사용할 도구를 추천합니다.
-    각 도구에 대해 적합한 검색 키워드 및 도구를 제공합니다.
-    """
-    prompt_text = f"""
-    당신은 리서치 검색 툴의 planner입니다.
-    사용자의 주제: "{topic}"
-    아래의 조건에 맞게 질문과 그에 적합한 검색 키워드, 사용할 도구를 가능한 많이 추천하세요.
-    이 주제에 대해 검색할 수 있는 도구를 추천하고, 각 도구별 검색 특성을 반영하여 어떤 검색어를 사용해야 할지 반환해 주세요.
-
-    출력 형식 예시:
-    [
-      {{
-        "question": "삼성전자의 최신 기술은?",
-        "search_tools": [
-          {{
-            "search_tool": "wikipedia_tool",
-            "keyword": "삼성전자 최신 기술"
-          }},
-          {{
-            "search_tool": "rag_news_search_tool",
-            "keyword": "삼성전자 기술 2025"
-          }}
-        ]
-      }}
-    ]
-
-    사용 가능한 도구 목록:
-    - wikipedia_tool
-    - reddit_tool
-    - naver_blog_tool
-    - daum_blog_tool
-    - rag_news_search_tool
-    - search_web_tool
-    """
-
-    llm = ChatOpenAI(temperature=0, streaming=True)
-    chain = LLMChain(llm=llm, prompt=PromptTemplate.from_template("{prompt}"))
-    output = await chain.arun(prompt=prompt_text)
-
-    # 결과를 JSON 형식으로 파싱하여 반환
-    result = json.loads(output)
-
-    # 디버깅: result 내용 확인
-    print(f"[planner_tool] result: {result}")
-
-    # 데이터를 추출
-    final_result = []
-    for item in result:
-        question = item.get("question", "")
-        keyword = item.get("keyword", "")
-        search_tools = item.get("search_tools", [])
-
-        # 검색 도구별로 키워드 매핑 처리
-        search_tool_list = [{"search_tool": tool["search_tool"], "keyword": tool["keyword"]} for tool in search_tools]
-
-        # 최종 결과 생성
-        final_result.append({
-            "question": question,
-            "keyword": keyword,
-            "search_tools": search_tool_list
-        })
-
-    return final_result
-
-@tool
-async def summarizer_tool(content: Any, source: str = "") -> str:
-    """
-    웹/뉴스/블로그 등의 개별 콘텐츠를 요약하는 도구.
-    """
-    llm = ChatOpenAI(temperature=0, streaming=True)
-    prompt = PromptTemplate.from_template("""
-      당신은 리서치 검색 툴의 summarizer 입니다. 
-      당신의 역할은 각 소스에서 수집된 정보들을 가진 의미를 잃지 않으면서, 적절한 길이로 줄이는 것입니다.
-      다음은 [{source}]에서 수집한 문서입니다. 이 문서의 핵심 내용을 적절하게 요약하세요. 
-      전체 문장의 의미를 잃지 않도록 주의하고, 과도하게 내용을 축소하지 않도록 합니다. 
-      요약은 문서의 핵심 아이디어를 유지하며 작성해 주세요.
-  
-      문서 내용:
-      {content}
-    """)
-    chain = LLMChain(llm=llm, prompt=prompt)
-    return await chain.ainvoke({"content": content, "source": source})
-
-@tool
-async def analyzer_tool(context: str, question: str) -> str:
-    """
-    인사이트 추출 도구.
-
-    주어진 문서와 조사 질문을 바탕으로 사용자가 실제로 리서치에 활용할 수 있는
-    통찰력 있는 인사이트를 서술형 문단 형식으로 생성합니다.
-    """
-
-    llm = ChatOpenAI(streaming=True, temperature=0)
-
-    template = PromptTemplate.from_template("""
-    당신은 리서치 툴의 analyzer입니다.
-    당신의 역할은 주어진 문서들을 바탕으로 사용자가 실제로 리서치에 활용할 수 있는 통찰력 있는 인사이트를 서술하는 것입니다.
-    다음은 사용자가 제시한 질문과 이에 대한 참고 문서입니다.
-
-    [질문]
-    {question}
-
-    [문서]
-    {context}
-
-    위 정보를 바탕으로 다음을 수행하세요:
-
-    [요구사항]
-    - 질문에 대한 답변을 넘어서, 의미 있는 인사이트 2~3개를 추론해 작성합니다.
-    - 각 인사이트는 논리적 근거를 포함하며, 가능하면 문서에서 직접 인용합니다.
-    - 단순 정보 요약이 아닌 '해석', '비판적 분석', '의미 도출'을 포함해야 합니다.
-    - 전체 응답은 서술형 문단 형식으로 작성합니다.
-    - 리스트, 마크다운, 줄바꿈 없이 하나의 문단으로 작성합니다.
-
-    인사이트:
-    """)
-
-    chain = LLMChain(llm=llm, prompt=template)
-    return await chain.arun(context=context, question=question)
-
-
-@tool
-async def fact_check_tool(context: str) -> str:
-    """
-    콘텐츠 신뢰도 평가 도구.
-
-    주어진 기사나 웹 텍스트(context)에 포함된 주장이나 정보의 신뢰성을 평가합니다.
-
-    Args:
-        context (str): 기사 본문 또는 웹 페이지 텍스트
-
-    Returns:
-        str: 신뢰도 평가 결과 (사실 여부, 출처 확인, 신뢰 수준 등 포함)
-    """
-    llm = ChatOpenAI(streaming=True, temperature=0)
-    template = PromptTemplate.from_template("""
-    당신은 리서치 툴의 신뢰도 평가자입니다.
-    다음은 사용자가 수집한 웹 기사 또는 콘텐츠입니다:
-
-    [본문]
-    {context}
-
-    위 정보의 신뢰성을 다음 기준에 따라 평가하세요:
-    - 과학적 근거, 통계, 인용 등 신뢰 가능한 출처가 있는지 확인
-    - 음모론, 과장된 주장, 출처 미확인 정보는 경고
-    - 사실 여부 판단이 어려운 경우, 그 이유를 설명
-    - 종합적으로 이 콘텐츠의 신뢰 수준을 "높음 / 보통 / 낮음" 중 하나로 판단
-
-    출력 형식 예시:
-    - 신뢰 수준: 보통
-    - 근거: 출처가 명확하지 않지만 특정 사실은 확인됨
-    - 주의할 점: 일부 과장된 표현 존재
-    """)
-    chain = LLMChain(llm=llm, prompt=template)
-    return await chain.arun(context=context)
-
-@tool
-async def synthesizer_tool(insights: List[str]) -> str:
-    """
-    최종 보고서 작성 도구.
-
-    수집된 인사이트들을 기반으로 정식 리서치 보고서를 작성합니다.
-    [개요-본론-결론] 형식을 갖춘, 기업/정책/트렌드 리포트에 준하는 구조로 문서화합니다.
-    """
-
-    llm = ChatOpenAI(streaming=True, temperature=0)
-
-    combined = "\n".join(insights)
-
-    template = PromptTemplate.from_template("""
-    당신은 리서치 툴의 최종 보고서 작성자입니다.
-    수집된 인사이트들을 기반으로 리서치 보고서를 작성합니다.
-    
-    다음은 사용자가 조사한 주제에 대한 주요 인사이트 목록입니다:
-    
-    [인사이트 목록]
-    {content}
-
-    위 내용을 바탕으로 다음과 같은 형식의 보고서를 작성하세요.
-
-    [요구사항]
-    - 전체 구조는 '개요 → 본론 → 결론' 순으로 작성하세요.
-    - 개요: 전체 주제 및 조사 목적 요약
-    - 본론: 핵심 인사이트를 근거와 함께 서술 (논리 전개 필요)
-    - 결론: 요약 및 향후 시사점 또는 전망 포함
-    - 보고서 문체는 공적인 문서 형식으로 작성
-    - 마크다운, 기호, 줄번호 없이 일반 문단으로 작성
-
-    리포트:
-    """)
-
-    chain = LLMChain(llm=llm, prompt=template)
-    return await chain.arun(content=combined)
-
 @tool
 def generate_dalle3_enhanced(prompt: str) -> str:
     """
@@ -1286,9 +1364,10 @@ def generate_dalle3_enhanced(prompt: str) -> str:
         print(f"DALL·E 생성 오류: {str(e)}")
         return f"이미지 생성 실패: {str(e)}"
 
-
 tools = [
     hybrid_news_search_tool,
+    gnews_search_tool,
+    newsapi_search_tool,
     community_search_tool,
     search_web_tool,
     youtube_video_tool,
@@ -1301,7 +1380,8 @@ tools = [
     keyword_news_search_tool,
     namuwiki_tool,
     stock_history_tool,
-    generate_dalle3_enhanced
+    generate_dalle3_enhanced,
+    kr_stock_history_tool
 ]
 
 # 도구 분류
