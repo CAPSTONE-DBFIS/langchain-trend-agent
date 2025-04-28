@@ -1,4 +1,5 @@
 import os
+import openai
 
 import wikipedia
 from dotenv import load_dotenv
@@ -1051,6 +1052,49 @@ async def synthesizer_tool(insights: List[str]) -> str:
     chain = LLMChain(llm=llm, prompt=template)
     return await chain.arun(content=combined)
 
+@tool
+def generate_dalle3_enhanced(prompt: str) -> str:
+    """
+    GPT-4o-mini로 프롬프트를 보완한 뒤, DALL·E 3 API로 이미지 생성
+
+    Args:
+        prompt (str): 사용자 입력 프롬프트
+
+    Returns:
+        str: 생성된 이미지 URL 또는 오류 메시지
+    """
+
+    openai.api_key = os.getenv("DALLE_API_KEY")
+
+    try:
+        llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.7)
+
+        template = PromptTemplate.from_template("""
+            You are a prompt engineer for DALL·E 3.
+            Rewrite the following prompt in **English**, with vivid, concrete visual details:
+            "{prompt}"
+            Avoid abstract language. Keep it concise and realistic.
+            """)
+
+        formatted_prompt = template.format(prompt=prompt)
+        enhanced_prompt = llm.invoke(formatted_prompt)
+
+        # 프롬프트 확인용
+        # print("GPT 보완 프롬프트:", enhanced_prompt.content)
+
+        dalle_response = openai.images.generate(
+            model="dall-e-3",
+            prompt=enhanced_prompt.content,
+            size="1024x1024",
+            quality="standard",
+            n=1
+        )
+        return dalle_response.data[0].url
+
+    except Exception as e:
+        print(f"DALL·E 생성 오류: {str(e)}")
+        return f"이미지 생성 실패: {str(e)}"
+
 
 tools = [
     rag_news_search_tool,
@@ -1066,7 +1110,8 @@ tools = [
     generate_trend_report_tool,
     get_daily_news_trend_tool,
     keyword_news_search_tool,
-    get_stock_price
+    get_stock_price,
+    generate_dalle3_enhanced
 ]
 
 # 도구 분류
