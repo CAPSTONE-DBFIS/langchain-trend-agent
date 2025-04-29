@@ -1,14 +1,14 @@
 import requests
 from bs4 import BeautifulSoup
 from utils import format_date, save_to_csv
+import time
 
 media_company = "ARS_Technica"
 
 
-def extract_article_details(url, headers):
+def extract_article_details(url, headers, category):
     response = requests.get(url, headers=headers)
     if response.status_code != 200:
-        print(f"[상세 페이지] {url} 가져오기 실패 (상태 코드: {response.status_code})")
         return None
 
     soup = BeautifulSoup(response.content, 'html.parser')
@@ -19,24 +19,112 @@ def extract_article_details(url, headers):
     date_str = time_tag.get("datetime") if (time_tag and time_tag.has_attr("datetime")) else (time_tag.get_text(strip=True) if time_tag else "날짜 정보 없음")
     formatted_date = format_date(date_str)
 
+    # 개선된 본문 추출 방법
     content_div = soup.find("div", class_="post-content post-content-double")
-    content = content_div.get_text(separator="\n", strip=True) if content_div else "본문 없음"
+    content = ""
+    
+    if content_div:
+        # 모든 <p> 태그를 찾아서 텍스트를 순서대로 결합
+        paragraphs = content_div.find_all("p")
+        if paragraphs:
+            content = " ".join([p.get_text(strip=True) for p in paragraphs])
+        
+        # <p> 태그가 없거나 결과가 비어있는 경우 대체 방법으로 모든 텍스트 추출
+        if not content.strip():
+            content = content_div.get_text(separator=" ", strip=True)
+    
+    if not content.strip():
+        content = "본문 없음"
+
+    # 이미지 URL 추출 시도
+    image_url = extract_image_url(soup)
 
     return {
-        "media_company": media_company,
-        "date": formatted_date,
-        "title": title,
+        "category": category,
         "content": content,
+        "date": formatted_date,
+        "image_url": image_url,
+        "media_company": media_company,
+        "title": title,
         "url": url
     }
 
 
-def scrape_arstechnica_gadgets(num_pages=5):
+def extract_image_url(soup):
+    """기사에서 이미지 URL 추출 시도 (다양한 HTML 구조 대응)"""
+    try:
+        # 방법 1: 메인 기사 이미지 (figure.intro-image)
+        figure = soup.find("figure", class_="intro-image")
+        if figure:
+            img = figure.find("img", src=True)
+            if img:
+                return img["src"]
+        
+        # 방법 2: 메인 아티클 이미지 (article-image 관련 클래스)
+        img = soup.find("img", class_="article-image")
+        if img and img.has_attr("src"):
+            return img["src"]
+            
+        # 방법 3: wp-post-image 클래스를 가진 이미지 (제공된 HTML 예시)
+        img = soup.find("img", class_="wp-post-image")
+        if img and img.has_attr("src"):
+            # srcset이 있는 경우 가장 큰 이미지 URL 추출 시도
+            if img.has_attr("srcset"):
+                srcset = img["srcset"]
+                # srcset 형식: "url1 size1w, url2 size2w, ..."
+                parts = srcset.split(",")
+                largest_img = ""
+                largest_size = 0
+                
+                for part in parts:
+                    part = part.strip()
+                    if not part:
+                        continue
+                    img_parts = part.split()
+                    if len(img_parts) >= 2:
+                        img_url = img_parts[0]
+                        # 크기 표시에서 'w' 제거하고 정수로 변환
+                        try:
+                            size = int(img_parts[1].replace("w", ""))
+                            if size > largest_size:
+                                largest_size = size
+                                largest_img = img_url
+                        except ValueError:
+                            continue
+                
+                if largest_img:
+                    return largest_img
+            
+            # srcset이 없거나 처리에 실패한 경우 기본 src 사용
+            return img["src"]
+            
+        # 방법 4: 일반적인 기사 내 첫 번째 이미지
+        img = soup.find("img", src=True)
+        if img:
+            return img["src"]
+            
+    except Exception as e:
+        print(f"[예외] 이미지 URL 추출 오류: {str(e)}")
+    
+    return ""  # 이미지를 찾지 못한 경우 빈 문자열 반환
+
+
+def get_category_from_url(section_url):
+    """URL에서 카테고리 추출"""
+    if "gadgets" in section_url:
+        return "TECH"
+    elif "security" in section_url:
+        return "SECURITY"
+    elif "information-technology" in section_url:
+        return "INFORMATION-TECHNOLOGY"
+    else:
+        return "IT"  # 기본 카테고리
+
+
+def scrape_arstechnica_section(section_url):
     """
-    https://arstechnica.com/gadgets/ 및 후속 페이지들을 순회하면서
-    각 기사의 URL과 article id를 수집한 후, 해당 링크에서 상세 데이터를 추출합니다.
+    지정된 Ars Technica 섹션 URL에서 첫 페이지의 기사를 스크래핑합니다.
     """
-    base_url = "https://arstechnica.com/gadgets/"
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -45,60 +133,102 @@ def scrape_arstechnica_gadgets(num_pages=5):
         )
     }
 
-    all_articles_data = []
+    # URL에서 카테고리 결정
+    category = get_category_from_url(section_url)
+    articles_data = []
+    failed_count = 0
 
-    for page in range(1, num_pages + 1):
-        # 첫 페이지는 기본 URL, 이후 페이지는 /page/{번호}/ 형식
-        if page == 1:
-            url = base_url
-        else:
-            url = f"{base_url}page/{page}/"
+    response = requests.get(section_url, headers=headers)
+    if response.status_code != 200:
+        print(f"[예외] 페이지를 가져오는데 실패했습니다: {section_url} (상태 코드: {response.status_code})")
+        return articles_data, failed_count
 
-        print(f"\n[페이지 {page} 스크래핑] - URL: {url}")
-        response = requests.get(url, headers=headers)
-        if response.status_code != 200:
-            print(f"페이지를 가져오는데 실패했습니다. (상태 코드: {response.status_code})")
+    soup = BeautifulSoup(response.content, "html.parser")
+    # id 속성이 있는 <article> 태그 찾기
+    articles = soup.find_all("article", id=True)
+    if not articles:
+        print(f"[예외] id 속성이 있는 <article> 태그를 찾지 못했습니다: {section_url}")
+        return articles_data, failed_count
+
+    for article in articles:
+        article_id = article.get("id")
+        # 각 article 내부에서 a 태그의 href(기사 링크) 추출
+        a_tag = article.find("a", href=True)
+        if not a_tag:
+            failed_count += 1
             continue
+        article_link = a_tag["href"]
 
-        soup = BeautifulSoup(response.content, "html.parser")
-        # id 속성이 있는 <article> 태그 찾기
-        articles = soup.find_all("article", id=True)
-        if not articles:
-            print("id 속성이 있는 <article> 태그를 찾지 못했습니다.")
-            continue
-
-        for article in articles:
-            article_id = article.get("id")
-            # 각 article 내부에서 a 태그의 href(기사 링크) 추출
-            a_tag = article.find("a", href=True)
-            if not a_tag:
-                print(f"[{article_id}] 링크를 찾지 못했습니다.")
+        # 상세 페이지에서 title, date, 본문(desc) 추출
+        details = extract_article_details(article_link, headers, category)
+        if details:
+            # 유효성 검사: 제목, 본문이 모두 있어야 함.
+            if details["title"] == "제목 없음" or details["content"] == "본문 없음":
+                failed_count += 1
                 continue
-            article_link = a_tag["href"]
-            print(f"\n>> [기사 스크래핑] Article ID: {article_id}, URL: {article_link}")
+                
+            articles_data.append(details)
+        else:
+            failed_count += 1
+            continue
 
-            # 상세 페이지에서 title, date, 본문(desc) 추출
-            details = extract_article_details(article_link, headers)
-            if details:
-                # 만약 title이나 content가 올바른 형식이 아니라면(예: "제목 없음", "본문 없음") 해당 데이터를 제외합니다.
-                if details["title"] == "제목 없음" or details["content"] == "본문 없음":
-                    print(f"[{article_id}] 유효하지 않은 title 또는 content로 인해 해당 데이터를 제외합니다.")
-                    continue
-                all_articles_data.append(details)
-                print("     Title :", details["title"])
-                print("     Date  :", details["date"])
-                preview = details["content"][:100] + "..." if len(details["content"]) > 100 else details["content"]
-                print("     content  :", preview)
-            else:
-                print(f"[{article_id}] 상세 데이터를 가져오지 못했습니다.")
+    return articles_data, failed_count
 
+
+def ars_technica_start(page_count=1):
+    """
+    Ars Technica 기사 스크래핑을 시작하는 함수.
+    지정된 페이지 수를 고려하여 각 섹션에서 스크래핑을 시도합니다.
+    
+    Args:
+        page_count (int): 고려할 페이지 수 (각 섹션별로 적용)
+    
+    Returns:
+        list: 스크래핑된 기사 리스트
+    """
+    print(f"Ars Technica 기사 스크래핑 시작 (각 섹션당 최대 {page_count}페이지)")
+    
+    # 스크래핑할 섹션 URL 목록
+    section_urls = [
+        "https://arstechnica.com/gadgets/",
+        "https://arstechnica.com/security/",
+        "https://arstechnica.com/information-technology/"
+    ]
+    
+    all_articles_data = []
+    total_failed = 0
+    
+    # 각 섹션별로 지정된 페이지만큼 스크래핑
+    for section_index, section_url in enumerate(section_urls):
+        print(f"Ars Technica: 섹션 {section_index+1}/{len(section_urls)} 스크래핑 시작")
+        
+        # 기본 섹션 URL (1페이지)
+        section_articles, failed = scrape_arstechnica_section(section_url)
+        all_articles_data.extend(section_articles)
+        total_failed += failed
+        
+        # 추가 페이지 스크래핑 (page_count가 1보다 큰 경우)
+        for page in range(2, page_count + 1):
+            page_url = f"{section_url}/page/{page}/"
+            page_articles, page_failed = scrape_arstechnica_section(page_url)
+            all_articles_data.extend(page_articles)
+            total_failed += page_failed
+            # 페이지 간 지연 시간 추가
+            time.sleep(2)
+        
+        print(f"Ars Technica: 섹션 {section_index+1} 스크래핑 완료, {len(section_articles)}개 기사 추출")
+    
+    print(f"Ars Technica: 총 {len(all_articles_data)}개 기사 스크래핑 성공, {total_failed}개 실패")
+    
+    # CSV 파일 저장
+    if all_articles_data:
+        csv_file_path = "../../data/raw/ars_technica_article.csv"
+        save_to_csv(all_articles_data, csv_file_path)
+        print(f"Ars Technica: CSV 파일 저장 완료 ({csv_file_path})")
+    
     return all_articles_data
 
 
 if __name__ == "__main__":
-    # 예시로 5페이지까지 스크래핑 (필요에 따라 num_pages 값을 조절)
-    articles_data = scrape_arstechnica_gadgets(num_pages=1)
-
-    # 3단계: 수집한 데이터를 CSV 파일로 저장 (컬럼: url, title, date, desc)
-    csv_file_path = "../../data/raw/ars_technica_article.csv"
-    save_to_csv(articles_data, csv_file_path)
+    # 기존 코드를 start 함수 호출로 대체
+    articles = ars_technica_start(page_count=1)
