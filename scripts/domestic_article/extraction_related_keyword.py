@@ -140,7 +140,7 @@ def keyword_analysis(date, stopwords_file_path=STOPWORDS_PATH):
         }
 
         try:
-            related_response = es.search(index=os.getenv("ELASTICSEARCH_INDEX_NAME"), body=query_related, size=1000)
+            related_response = es.search(index=os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME"), body=query_related, size=1000)
             print(f"'{word}' 키워드 포함 문서 수: {len(related_response['hits']['hits'])}")
         except Exception as e:
             print(f"Elasticsearch Error: {e}")

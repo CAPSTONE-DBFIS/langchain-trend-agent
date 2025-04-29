@@ -1,83 +1,83 @@
 import os
-import openai
-
-import wikipedia
-from dotenv import load_dotenv
-import time
-from datetime import datetime, timedelta
-import requests
-import re
 import io
+import json
+import re
+import openai
+import time
+import asyncio
+from uuid import uuid4
+from datetime import datetime, timedelta, timezone
+from dateutil import parser
+
+from zoneinfo import ZoneInfo
+from typing import Optional, List, Dict, Any, Union
+from urllib.parse import quote
+import aiohttp
+import logging
+
+import requests
+from requests.auth import HTTPBasicAuth
+import wikipedia
+import yfinance as yf
+from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 from googleapiclient.discovery import build
+from docx import Document
+from docx.shared import Inches
+import matplotlib
+matplotlib.use('Agg')  # 백엔드 설정
+import matplotlib.pyplot as plt
+from fake_useragent import UserAgent
+from elasticsearch import Elasticsearch
+from functools import wraps
+import FinanceDataReader as fdr
+
 from langchain.prompts import PromptTemplate
 from langchain.chat_models import ChatOpenAI
 from langchain.chains.llm import LLMChain
+from langchain.tools import tool
 from langchain_community.tools import WikipediaQueryRun
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import WikipediaAPIWrapper
-from langchain.tools import tool
-from pytrends.request import TrendReq
-from typing import Dict, Union, List, Any
+
 from app.utils.milvus_util import get_embedding_model, get_domestic_article_vector_store
 from app.utils.db_util import get_db_connection
 from app.utils.redis_util import get_redis_client
-import matplotlib
-matplotlib.use('Agg') # 백엔드에서 작업
-import matplotlib.pyplot as plt
-from uuid import uuid4
-from docx import Document
-from docx.shared import Inches
-import asyncio
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-import yfinance as yf
-from langchain_community.tools.reddit_search.tool import RedditSearchRun, RedditSearchSchema
-from langchain_community.utilities.reddit_search import RedditSearchAPIWrapper
-import json
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+def async_time_logger(name: str):
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            result = await func(*args, **kwargs)
+            end = time.perf_counter()
+            logger.info(f"[{name}] 실행 시간: {(end - start):.3f}초")
+            return result
+        return wrapper
+    return decorator
 
 load_dotenv()
+KST = timezone(timedelta(hours=9))
 
-@tool
-async def rag_news_search_tool(query: str) -> List[Dict[str, Union[str, float]]]:
+@async_time_logger("rag_news_search")
+async def rag_news_search(query: str, date_start: str, date_end: str) -> List[Dict[str, Union[str, float]]]:
     """
-    Milvus에서 RAG를 이용한 의미 기반 IT 뉴스 기사 검색 도구.
-
-    Milvus에 저장된 뉴스 기사 데이터에서 입력된 키워드와 의미상 가장 유사한 기사를 검색합니다.
-    최근 30일 내 등록된 문서를 우선 검색하며, 충분한 결과가 없을 경우 전체 데이터에서 추가 검색을 수행합니다.
-
-    Args:
-        query (str): 검색할 키워드
-
-    Returns:
-        List[Dict[str, Union[str, float]]]: 검색된 뉴스 기사 목록
-            - "title" (str): 기사 제목
-            - "date" (str): 기사 발행일
-            - "media_company" (str): 언론사 이름
-            - "url" (str): 기사 URL
-            - "score" (float): 유사도 점수
-
+    Milvus에서 RAG를 이용한 의미 기반 IT 뉴스 기사 검색 도구 (기간 필터 포함).
     """
-
-    # Embedding 모델 및 벡터 저장소 가져오기
     embedding_model = get_embedding_model()
     vector_store = get_domestic_article_vector_store()
 
     query_embedding = embedding_model.embed_query(query)
+    start_ts = int(datetime.strptime(date_start, "%Y-%m-%d").timestamp())
+    end_ts = int(datetime.strptime(date_end, "%Y-%m-%d").timestamp())
 
-    # 최신 문서 우선 검색 (최근 30일 내)
-    recent_timestamp = int(time.time()) - (30 * 86400)
-    latest_results = vector_store.similarity_search_with_score_by_vector(
-        query_embedding, k=5, filter={"timestamp": {"$gte": recent_timestamp}}
+    results = vector_store.similarity_search_with_score_by_vector(
+        query_embedding, k=5, filter={"timestamp": {"$gte": start_ts, "$lte": end_ts}}
     )
-
-    # 최신 문서가 부족하면 전체 검색 추가
-    if len(latest_results) < 5:
-        additional_results = vector_store.similarity_search_with_score_by_vector(query_embedding, k=5-len(latest_results))
-        combined_results = latest_results + [doc for doc in additional_results if doc not in latest_results]
-    else:
-        combined_results = latest_results
 
     return [
         {
@@ -88,30 +88,288 @@ async def rag_news_search_tool(query: str) -> List[Dict[str, Union[str, float]]]
             "url": doc.metadata["url"],
             "score": score
         }
-        for doc, score in combined_results
+        for doc, score in results
     ]
+
+@async_time_logger("keyword_news_search")
+async def es_news_search(keyword: str, date_start: str, date_end: str) -> str:
+    """
+    Elasticsearch 뉴스 검색 도구 (기간 필터 포함).
+    """
+    es = Elasticsearch(
+        hosts=[f"http://{os.getenv('ELASTICSEARCH_HOST')}:{os.getenv('ELASTICSEARCH_PORT')}"],
+        basic_auth=(os.getenv("ELASTICSEARCH_USERNAME"), os.getenv("ELASTICSEARCH_PASSWORD")),
+        verify_certs=False
+    )
+
+    try:
+        must_clauses = [
+            {
+                "range": {
+                    "date": {
+                        "gte": f"{date_start}T00:00:00",
+                        "lte": f"{date_end}T23:59:59"
+                    }
+                }
+            }
+        ]
+
+        should_clauses = [
+            {"match": {"title": keyword}}
+        ]
+
+        query = {
+            "query": {
+                "bool": {
+                    "must": must_clauses,
+                    "should": should_clauses,
+                    "minimum_should_match": 1
+                }
+            },
+            "from": 0,
+            "size": 10
+        }
+
+        result = es.search(index=os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME"), body=query)
+        return json.dumps(result.body, ensure_ascii=False, indent=2)
+
+    except Exception as e:
+        return f"Elasticsearch 검색 실패: {str(e)}"
 
 
 @tool
-async def daum_blog_tool(keyword, max_results=10):
+@async_time_logger("hybrid_news_search_tool")
+async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = None, date_end: str = None) -> list:
     """
-    커뮤니티 트렌드 - Daum 블로그 검색 도구.
+    Elasticsearch + Milvus 병렬 하이브리드 네이버 IT 카테고리 뉴스 검색 도구
 
-    Daum 블로그 API를 사용하여 특정 키워드(keyword)와 관련된 블로그 게시글을 검색합니다.
+    이 함수는 두 가지 방식의 뉴스 검색을 병렬로 수행합니다:
 
-    Args:
-        keyword (str): 검색할 키워드
-        max_results (int, optional): 최대 검색 결과 수 (기본값: 10)
+    1. **Elasticsearch**: 키워드 기반의 문자열 검색
+    2. **Milvus (RAG)**: 임베딩 기반의 의미 유사도 검색 (질문 기반)
+
+    ### Args:
+    - query (str): 의미 기반 검색을 위한 질문 문장 (예: "AI가 기업 생산성에 미치는 영향은?")
+    - keyword (str): Elasticsearch용 주요 키워드 (예: "AI", "삼성", "반도체")
+    - date_start (str, optional): 검색 시작 날짜 (형식: YYYY-MM-DD). 지정하지 않으면 최근 365일 기준 자동 설정됨.
+    - date_end (str, optional): 검색 종료 날짜 (형식: YYYY-MM-DD). 지정하지 않으면 오늘 날짜 기준으로 자동 설정됨.
+
+    ### 결과 항목
+    - title: 기사 제목
+    - date: 발행일
+    - media_company: 언론사
+    - url: 기사 링크
+    - content: 본문 요약 or 전체 본문
+    - score: 점수 (ES의 경우 `_score`, Milvus의 경우 유사도 점수)
+    - source: "Elasticsearch" 또는 "Milvus"
+
+    ### 사용 시 주의사항
+    - **뉴스 기사는 매일 자정에 자동 크롤링 및 업데이트**됩니다.
+      - 따라서 가장 최신 기사는 **"현재 시간 기준 하루 전"**입니다.
+    - Elasticsearch는 **UTC 기준 날짜**로 저장되며, 한국 기준 하루 차이 날 수 있습니다.
+    - Milvus는 의미 기반으로 질문을 벡터화하여 유사한 문서를 검색하며, 날짜 필터는 적용되지만 의미 정확도는 질문 문장 품질에 따라 달라질 수 있습니다.
+    - 반환 결과는 `url` 기준 중복 제거 후, `score` 기준으로 정렬됩니다.
 
     Returns:
-        List[Dict[str, str]]: 검색된 블로그 게시글 목록
-            - "title" (str): 게시글 제목
-            - "url" (str): 게시글 URL
-            - "contents" (str): 게시글 내용 요약
-            - "datetime" (str): 게시글 작성일 (ISO 형식)
+        list: 뉴스 기사 결과 목록 (최대 10~20개, 중복 제거됨)
     """
+    try:
+        if not date_start or not date_end:
+            today = datetime.utcnow().date()
+            date_start = (today - timedelta(days=365)).strftime("%Y-%m-%d")
+            date_end = today.strftime("%Y-%m-%d")
 
-    headers = {"Authorization": f"KakaoAK {os.getenv("DAUM_API_KEY")}"}
+        es_task = es_news_search(keyword, date_start, date_end)
+        rag_task = rag_news_search(query, date_start, date_end)
+
+        es_result_raw, rag_result = await asyncio.gather(es_task, rag_task)
+
+        es_results = json.loads(es_result_raw)
+        es_hits = es_results.get("hits", {}).get("hits", []) if isinstance(es_results, dict) else []
+
+        parsed_es = [
+            {
+                "title": item["_source"].get("title"),
+                "date": item["_source"].get("date"),
+                "media_company": item["_source"].get("media_company"),
+                "url": item["_source"].get("url"),
+                "content": item["_source"].get("content", ""),
+                "score": item.get("_score", 0),
+                "source": "Elasticsearch"
+            }
+            for item in es_hits
+        ]
+
+        parsed_rag = [
+            {
+                "title": item.get("title"),
+                "date": item.get("date"),
+                "media_company": item.get("media_company"),
+                "url": item.get("url"),
+                "content": item.get("content"),
+                "score": item.get("score", 0),
+                "source": "Milvus"
+            }
+            for item in rag_result
+        ]
+
+        combined = parsed_es + parsed_rag
+        unique_by_url = {item["url"]: item for item in combined}.values()
+        final_sorted = sorted(
+            unique_by_url,
+            key=lambda x: (0 if x["source"] == "Elasticsearch" else 1, -x["score"])
+        )
+        return list(final_sorted)
+
+    except Exception as e:
+        return [{"error": f"하이브리드 뉴스 검색 실패: {str(e)}"}]
+
+@tool
+@async_time_logger("gnews_search_tool")
+async def gnews_search_tool(query: str, lang: str = "en", country: str = "en", max_results: int = 10) -> List[Dict[str, str]]:
+    """
+    GNews API를 사용하여 해외 최신 뉴스를 검색하는 도구.
+
+    Args:
+        query (str): 검색할 영문 키워드 (예: "AI")
+        lang (str, optional): 뉴스 언어 (기본값: "en")
+        country (str, optional): 뉴스 지역 (기본값: "en")
+        max_results (int, optional): 최대 검색 결과 수 (기본값: 10, GNews 최대 100)
+
+    Returns:
+        List[Dict[str, str]]: 뉴스 기사 목록
+            - title: 기사 제목
+            - date: 발행일 (YYYY-MM-DD HH:MM 형식, KST 기준)
+            - media_company: 언론사
+            - url: 기사 링크
+            - content: 기사 요약 (description)
+            - source: "GNews"
+    """
+    try:
+        # GNews API 요청 URL 구성
+        api_key = os.getenv("GNEWS_API_KEY")  # .env 파일에 GNEWS_API_KEY 추가 필요
+        if not api_key:
+            return [{"error": "GNews API 키가 설정되지 않았습니다. .env 파일에 GNEWS_API_KEY를 추가하세요."}]
+
+        max_results = min(max_results, 100)  # GNews API 최대 결과 수 제한
+        url = (
+            f"https://gnews.io/api/v4/search?"
+            f"q={quote(query)}&lang={lang}&country={country}&max={max_results}&apikey={api_key}"
+        )
+
+        # API 호출
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(f"GNews API 요청 실패: {response.status} - {error_text}")
+                data = await response.json()
+
+        # 응답 데이터 확인
+        articles = data.get("articles", [])
+        if not articles:
+            return [{"error": f"'{query}'에 대한 최신 뉴스를 찾을 수 없습니다."}]
+
+        # GNews 응답을 LangChain 도구 형식으로 변환
+        parsed_articles = []
+        for article in articles:
+            published_at = parser.parse(article["publishedAt"]).astimezone(KST).strftime("%Y-%m-%d %H:%M")
+            parsed_articles.append({
+                "title": article["title"],
+                "date": published_at,
+                "media_company": article["source"]["name"],
+                "url": article["url"],
+                "content": article["description"],
+                "source": "GNews"
+            })
+
+        return parsed_articles
+
+    except Exception as e:
+        return [{"error": f"GNews 검색 실패: {str(e)}"}]
+
+
+@tool
+@async_time_logger("newsapi_search_tool")
+async def newsapi_search_tool(query: str, lang: str = "en", max_results: int = 10) -> List[Dict[str, str]]:
+    """
+    NewsAPI를 사용하여 해외 최신 뉴스를 검색하는 도구.
+
+    Args:
+        query (str): 검색할 영문 키워드 (예: "AI")
+        lang (str, optional): 뉴스 언어 (기본값: "en")
+        max_results (int, optional): 최대 검색 결과 수 (기본값: 10, NewsAPI 최대 100)
+
+    Returns:
+        List[Dict[str, str]]: 뉴스 기사 목록
+            - title: 기사 제목
+            - date: 발행일 (YYYY-MM-DD HH:MM 형식, KST 기준)
+            - media_company: 언론사
+            - url: 기사 링크
+            - content: 기사 요약 (description)
+            - source: "NewsAPI"
+    """
+    try:
+        # NewsAPI 요청 URL 구성
+        api_key = os.getenv("NEWS_API_KEY")  # .env 파일에 NEWSAPI_KEY 추가 필요
+        if not api_key:
+            return [{"error": "NewsAPI 키가 설정되지 않았습니다. .env 파일에 NEWS_API_KEY를 추가하세요."}]
+
+        max_results = min(max_results, 100)  # NewsAPI 최대 결과 수 제한
+        url = (
+            f"https://newsapi.org/v2/everything?"
+            f"q={quote(query)}&language={lang}&sortBy=publishedAt&pageSize={max_results}&apiKey={api_key}"
+        )
+
+        # API 호출
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(f"NewsAPI 요청 실패: {response.status} - {error_text}")
+                data = await response.json()
+
+        # 응답 데이터 확인
+        articles = data.get("articles", [])
+        if not articles:
+            return [{"error": f"'{query}'에 대한 최신 뉴스를 찾을 수 없습니다."}]
+
+        # NewsAPI 응답을 LangChain 도구 형식으로 변환
+        parsed_articles = []
+        for article in articles:
+            published_at = parser.parse(article["publishedAt"]).astimezone(KST).strftime("%Y-%m-%d %H:%M")
+            parsed_articles.append({
+                "title": article["title"],
+                "date": published_at,
+                "media_company": article["source"]["name"],
+                "url": article["url"],
+                "content": article["description"] or article["content"] or "",
+                "source": "NewsAPI"
+            })
+
+        return parsed_articles
+
+    except Exception as e:
+        return [{"error": f"NewsAPI 검색 실패: {str(e)}"}]
+
+@async_time_logger("search_daum_blogs")
+async def search_daum_blogs(keyword: str, max_results: int = 10) -> List[Dict[str, str]]:
+    """
+    Daum 블로그 게시글 검색 함수
+
+    Args:
+        keyword (str): 검색 키워드
+        max_results (int): 검색 결과 수 제한
+
+    Returns:
+        List[Dict[str, str]]: 각 게시글에 대해 다음 필드를 포함한 딕셔너리 리스트
+            - title: 제목
+            - url: 링크
+            - contents: 본문 요약
+            - datetime: 작성일 (KST 기준, 'YYYY-MM-DD HH:MM' 형식)
+            - source: "daum"
+    """
+    headers = {"Authorization": f"KakaoAK {os.getenv('DAUM_API_KEY')}"}
     params = {"query": keyword, "size": max_results, "sort": "accuracy"}
 
     try:
@@ -119,19 +377,18 @@ async def daum_blog_tool(keyword, max_results=10):
         response.raise_for_status()
         data = response.json()
 
-        results = [
+        return [
             {
                 "title": item["title"],
                 "url": item["url"],
                 "contents": item["contents"],
-                "datetime": item["datetime"]
+                "datetime": parser.parse(item["datetime"]).strftime("%Y-%m-%d %H:%M"),
+                "source": "daum"
             }
             for item in data.get("documents", [])
         ]
-        return results
-
-    except requests.exceptions.RequestException as e:
-        return {"error": f"Daum API 요청 실패: {str(e)}"}
+    except Exception as e:
+        raise RuntimeError(f"Daum API 오류: {str(e)}")
 
 
 def clean_html(text: str) -> str:
@@ -142,115 +399,141 @@ def clean_html(text: str) -> str:
     text = re.sub(r"&[^;]*;", "", text)  # HTML 엔티티 제거
     return text
 
-@tool
-async def naver_blog_tool(keyword: str, max_result: int = 10, days: int = 30) -> List[Dict[str, str]]:
+@async_time_logger("search_naver_blogs")
+async def search_naver_blogs(keyword: str, max_result: int = 10) -> List[Dict[str, str]]:
     """
-    커뮤니티 트렌드 - 네이버 블로그 검색 도구.
-
-    네이버 블로그에서 특정 키워드(keyword)로 최근 일정 기간(days) 내 게시된 글을 검색합니다.
+    Naver 블로그 검색 함수
 
     Args:
-        keyword (str): 검색할 키워드
-        max_result (int, optional): 최대 검색 결과 수 (기본값: 10)
-        days (int, optional): 검색할 기간 (최근 N일, 기본값: 30일)
+        keyword (str): 검색 키워드
+        max_result (int): 검색 결과 수 제한
 
     Returns:
-        List[Dict[str, str]]: 검색된 블로그 게시글 목록
-            - "title" (str): 게시글 제목
-            - "link" (str): 게시글 URL
-            - "description" (str): 게시글 요약
-            - "blogger_name" (str): 블로거 이름
-            - "post_date" (str): 게시일 (YYYYMMDD)
+        List[Dict[str, str]]: 각 게시글에 대해 다음 필드를 포함한 딕셔너리 리스트
+            - title: 제목
+            - url: 링크
+            - contents: 본문 요약
+            - datetime: 작성일 (KST 기준, 'YYYY-MM-DD HH:MM' 형식, 시간은 00:00 고정)
+            - source: "naver"
     """
-
     posts = []
-    cutoff_date = datetime.now() - timedelta(days=days)
 
     try:
-        display = min(max_result, 100)  # 네이버 API 최대 제한: 100
-        url = f"{os.getenv("NAVER_API_URL")}?query={keyword}&display={display}"
+        display = min(max_result, 100)
+        url = f"{os.getenv('NAVER_API_URL')}?query={keyword}&display={display}"
         headers = {
             "X-Naver-Client-Id": os.getenv("NAVER_CLIENT_ID"),
             "X-Naver-Client-Secret": os.getenv("NAVER_CLIENT_SECRET")
         }
 
         response = requests.get(url, headers=headers)
-        if response.status_code != 200:
-            raise Exception(f"네이버 API 호출 실패: {response.status_code}, {response.text}")
-
+        response.raise_for_status()
         data = response.json()
+
         for item in data.get("items", [])[:max_result]:
             post_date = datetime.strptime(item["postdate"], "%Y%m%d")
-
-            if post_date >= cutoff_date:
-                posts.append({
-                    "title": clean_html(item["title"]),
-                    "link": item["link"],
-                    "description": clean_html(item["description"]),
-                    "blogger_name": item["bloggername"],
-                    "post_date": item["postdate"]
-                })
-
-        # 최신순 정렬 후 max_result만큼 제한
-        posts = sorted(posts, key=lambda x: x["post_date"], reverse=True)[:max_result]
-
+            posts.append({
+                "title": clean_html(item["title"]),
+                "url": item["link"],
+                "contents": clean_html(item["description"]),
+                "datetime": post_date.strftime("%Y-%m-%d 00:00"),
+                "source": "naver"
+            })
+        return posts
     except Exception as e:
-        raise RuntimeError(f"네이버 블로그 검색 중 오류 발생: {str(e)}")
-
-    return posts
+        raise RuntimeError(f"Naver 블로그 검색 오류: {str(e)}")
 
 
-# Reddit API Wrapper 초기화
-reddit_search_tool = RedditSearchRun(
-    api_wrapper=RedditSearchAPIWrapper(
-        reddit_client_id=os.getenv("REDDIT_CLIENT_ID"),
-        reddit_client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
-        reddit_user_agent="web:com.dbfis.chatbot:v1.0.0 (by /u/Hot_Mission1860)"
-    )
-)
+def get_reddit_access_token():
+    """
+    Reddit 액세스 토큰 발급
+    """
+
+    auth = HTTPBasicAuth(os.getenv("REDDIT_CLIENT_ID"), os.getenv("REDDIT_CLIENT_SECRET"))
+    headers = {
+        "User-Agent": "web:com.dbfis.chatbot:v1.0.0 (by /u/Hot_Mission1860)",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    data = {
+        "grant_type": "password",
+        "username": os.getenv("REDDIT_USERNAME"),
+        "password": os.getenv("REDDIT_PASSWORD")
+    }
+
+    response = requests.post("https://www.reddit.com/api/v1/access_token", headers=headers, auth=auth, data=data)
+
+    if response.status_code != 200:
+        raise Exception(f"Reddit OAuth 인증 실패: {response.json()}")
+
+    return response.json().get("access_token")
+
+@async_time_logger("search_reddit_posts")
+async def search_reddit_posts(keyword: str, max_result: int = 10) -> List[Dict[str, str]]:
+    try:
+        access_token = get_reddit_access_token()
+        headers = {
+            "Authorization": f"bearer {access_token}",
+            "User-Agent": "web:com.dbfis.chatbot:v1.0.0"
+        }
+        url = f"https://oauth.reddit.com/search?q={keyword}&limit={max_result}&sort=hot"
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            raise Exception(f"Reddit 검색 실패: {response.json()}")
+        data = response.json()
+        return [
+            {
+                "title": item["data"]["title"],
+                "url": f"https://www.reddit.com{item['data']['permalink']}",
+                "contents": item["data"].get("selftext", "").strip(),
+                "datetime": datetime.utcfromtimestamp(item["data"]["created_utc"]).replace(tzinfo=timezone.utc).astimezone(KST).strftime('%Y-%m-%d %H:%M'),
+                "source": "reddit"
+            }
+            for item in data.get("data", {}).get("children", [])
+        ]
+    except Exception as e:
+        raise RuntimeError(f"Reddit 검색 오류: {str(e)}")
+
 
 @tool
-async def reddit_tool(keyword: str, max_results: int = 10) -> list:
+@async_time_logger("community_search_tool")
+async def community_search_tool(korean_keyword: str, english_keyword: str, platform: str = "all", max_results: int = 10) -> List[Dict[str, str]]:
     """
-    커뮤니티 트렌드 - Reddit 인기 게시글 검색 도구.
+    커뮤니티 통합 검색 도구
 
-    Reddit에서 입력된 키워드(keyword)와 관련된 인기 게시글을 검색합니다.
+    필수 입력:
+    - korean_keyword (str): 블로그 검색용 한글 키워드 (Daum, Naver용)
+    - english_keyword (str): Reddit 검색용 영어 키워드 (Reddit용)
+
+    선택 입력:
+    - platform (str): "daum", "naver", "reddit", "all" 중 선택 (기본: all)
+    - max_results (int): 각 플랫폼별 최대 검색 결과 수 (기본: 10)
 
     Args:
-        keyword (str): 검색할 키워드
-        max_results (int, optional): 최대 검색 결과 수 (기본값: 10)
+        korean_keyword (str): 한글 검색 키워드
+        english_keyword (str): 영어 검색 키워드
+        platform (str): "daum", "naver", "reddit", "all"
+        max_results (int): 각 플랫폼별 최대 검색 수
 
     Returns:
-        List[Dict[str, Union[str, int]]]: 검색된 Reddit 게시글 목록
-            - "title" (str): 게시글 제목
-            - "url" (str): 게시글 URL
-            - "score" (int): 게시글 추천 점수 (upvotes)
-            - "created_utc" (str): 게시글 생성일 (UTC 기준)
+        List[Dict[str, str]]: 통합된 게시글 리스트
+            - title, url, contents, datetime (KST), source
     """
-    search_params = RedditSearchSchema(
-        query=keyword,
-        sort="hot",
-        time_filter="week",
-        subreddit="all",
-        limit=str(max_results)
-    )
+    tasks = []
+    if platform in ["all", "daum"]:
+        tasks.append(search_daum_blogs(korean_keyword, max_results))
+    if platform in ["all", "naver"]:
+        tasks.append(search_naver_blogs(korean_keyword, max_results))
+    if platform in ["all", "reddit"]:
+        tasks.append(search_reddit_posts(english_keyword, max_results))
 
-    try:
-        result = reddit_search_tool.run(tool_input=search_params.dict())
-    except Exception as e:
-        return [{"title": "Reddit API 호출 실패", "url": "", "score": 0, "created_utc": str(e)}]
+    results_nested = await asyncio.gather(*tasks)
+    results = [item for sublist in results_nested for item in sublist]
+    return sorted(results, key=lambda x: x["datetime"], reverse=True)[:max_results * (3 if platform == "all" else 1)]
 
-    return result
-
-    try:
-        result = reddit_search_tool.run(tool_input=search_params.dict())
-    except Exception as e:
-        return [{"title": "Reddit API 호출 실패", "url": "", "score": 0, "created_utc": str(e)}]
-
-    return result
 
 
 @tool
+@async_time_logger("search_web_tool")
 async def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, str]]:
     """
     실시간 웹 검색 도구.
@@ -276,6 +559,7 @@ async def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, s
 
 
 @tool
+@async_time_logger("youtube_video_tool")
 async def youtube_video_tool(query: str, max_results: int = 5):
     """
     커뮤니티 트렌드 - YouTube 동영상 검색 도구.
@@ -322,6 +606,7 @@ async def youtube_video_tool(query: str, max_results: int = 5):
     return results
 
 @tool
+@async_time_logger("request_url_tool")
 async def request_url_tool(input_url: str) -> str | None:
     """
     웹페이지 또는 PDF 문서에서 텍스트를 추출하는 도구.
@@ -333,7 +618,7 @@ async def request_url_tool(input_url: str) -> str | None:
         input_url (str): 요청할 웹 페이지 또는 PDF 파일의 URL
 
     Returns:
-        str: 추출된 텍스트 (유의미하지 않을 경우 None 또는 경고 메시지)
+        str: 추출된 텍스트
     """
     headers = {
         "User-Agent": (
@@ -380,6 +665,7 @@ async def request_url_tool(input_url: str) -> str | None:
         return f"[처리 오류] {str(e)}"
 
 @tool
+@async_time_logger("translation_tool")
 async def translation_tool(asking: str) -> str:
     """
     ChatGPT를 이용한 번역 도구.
@@ -405,6 +691,7 @@ async def translation_tool(asking: str) -> str:
         return f"Error: {e}"
 
 @tool
+@async_time_logger("wikipedia_tool")
 async def wikipedia_tool(query: str) -> str:
     """
     Wikipedia 검색 도구.
@@ -441,8 +728,8 @@ async def wikipedia_tool(query: str) -> str:
 
 
 @tool
-async def google_trending_tool(query: str, startDate: str = None, endDate: str = None) -> Dict[
-    str, Union[str, List[float], List[str]]]:
+@async_time_logger("google_trending_tool")
+async def google_trending_tool(query: str, start_date: str = None, end_date: str = None) -> Dict[str, Union[str, List[float], List[str]]]:
     """
     Google Trends 키워드 검색 도구.
 
@@ -450,8 +737,8 @@ async def google_trending_tool(query: str, startDate: str = None, endDate: str =
 
     Args:
         query (str): 검색할 키워드
-        startDate (str, optional): 검색 시작 날짜 (YYYY-MM-DD 형식, 기본값: 최근 1개월)
-        endDate (str, optional): 검색 종료 날짜 (YYYY-MM-DD 형식)
+        start_date (str, optional): 검색 시작 날짜 (YYYY-MM-DD 형식, 기본값: 최근 1개월)
+        end_date (str, optional): 검색 종료 날짜 (YYYY-MM-DD 형식)
 
     Returns:
         Dict[str, Union[str, List[float], List[str]]]: 트렌드 검색 결과
@@ -460,59 +747,45 @@ async def google_trending_tool(query: str, startDate: str = None, endDate: str =
             - "dates" (List[str]): 해당 날짜 목록 (YYYY-MM-DD)
     """
     try:
-        # pytrends API 연결
+        from pytrends.request import TrendReq
+
         pytrends = TrendReq(hl="ko", tz=540)
 
-        # `timeframe` 설정: 만약 `startDate`와 `endDate`가 주어지면, 그 값을 사용
-        if startDate and endDate:
-            timeframe = f"{startDate} {endDate}"  # 특정 날짜 범위
+        # 날짜 범위 설정
+        if start_date and end_date:
+            timeframe = f"{start_date} {end_date}"
         else:
-            timeframe = "today 1-m"  # 기본값: 최근 1개월
+            timeframe = "today 1-m"
 
-        # 최대 3번 재시도
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                # 검색 키워드, timeframe을 지정 설정
-                pytrends.build_payload([query], cat=0, timeframe=timeframe, geo="KR", gprop="")
+        # 요청
+        pytrends.build_payload([query], cat=0, timeframe=timeframe, geo="KR", gprop="")
 
-                # 관심도 데이터 가져오기
-                trend_data = pytrends.interest_over_time()
+        trend_data = pytrends.interest_over_time()
 
-                # 데이터 확인
-                if trend_data is None or trend_data.empty:
-                    return {"error": f"No trending data found for '{query}'."}
+        if trend_data is None or trend_data.empty:
+            return {"error": f"No trending data found for '{query}'."}
 
-                # 관심도 데이터, 날짜를 리스트에 담기
-                interest_data = trend_data[query].dropna().tolist()  # 관심도 데이터 리스트로 변환
-                dates = trend_data.index.strftime('%Y-%m-%d').tolist()  # 날짜를 리스트로 변환
+        interest_data = trend_data[query].dropna().tolist()
+        dates = trend_data.index.strftime('%Y-%m-%d').tolist()
 
-                return {
-                    "query": query,
-                    "interest_data": interest_data,
-                    "dates": dates
-                }
-
-            except Exception as e:
-                # 429 에러 발생 시, 10초 대기 후 재시도
-                if '429' in str(e):
-                    if attempt < max_retries - 1:
-                        print(f"Rate limit exceeded. Retrying in 5 seconds... (Attempt {attempt + 1}/{max_retries})")
-                        time.sleep(10)
-                    else:
-                        return {"error": "Maximum retries reached. Please try again later."}
-                else:
-                    return {"error": f"Error retrieving Google Trends data: {str(e)}"}
+        return {
+            "query": query,
+            "interest_data": interest_data,
+            "dates": dates
+        }
 
     except Exception as e:
+        if '429' in str(e):
+            return {"error": f"Rate limit exceeded for query '{query}'. Try again later."}
         return {"error": f"Error retrieving Google Trends data: {str(e)}"}
 
 
 @tool
+@async_time_logger("generate_trend_report_tool")
 async def generate_trend_report_tool(search_date: str = None) -> str:
     """
     트렌드 레포트 생성 도구.
-    DB에 저장된 날짜별 네이버 뉴스 상위 키워드를 기반으로 Milvus에서 관련 뉴스를 검색하고,
+    DB에 저장된 날짜별 네이버 IT 뉴스 상위 키워드를 기반으로 Milvus에서 관련 뉴스를 검색하고,
     GPT를 통해 종합적인 트렌드 분석 보고서를 생성합니다.
 
     ⚠️ 주의:
@@ -726,11 +999,12 @@ def upload_report_to_spring(file_path: str):
             raise Exception(f"Spring 업로드 실패: {response.status_code} {response.text}")
 
 @tool
+@async_time_logger("get_daily_news_trend_tool")
 async def get_daily_news_trend_tool(date: str) -> str:
     """
-    일간 트렌드 정보를 가져오는 도구.
+    Spring API를 이용해 일간 트렌드 정보를 가져오는 도구.
 
-    특정 날짜의 IT 뉴스 기사 상위 키워드와 각 키워드의 연관 키워드, 뉴스 기사 데이터를 가져옵니다.
+    특정 날짜의 네이버 IT 뉴스 기사 상위 키워드와 각 키워드의 연관 키워드, 뉴스 기사 데이터를 가져옵니다.
 
     ⚠️ 주의:
         - 본 도구는 "오늘 날짜(오늘 00시 이후)" 기준 데이터는 사용할 수 없습니다.
@@ -762,54 +1036,235 @@ async def get_daily_news_trend_tool(date: str) -> str:
 
 
 @tool
-async def keyword_news_search_tool(keyword: str, relatedKeyword: str, date: str, page: int = 0) -> str:
+@async_time_logger("stock_history_tool")
+async def stock_history_tool(
+    symbol: str,
+    period: Optional[str] = None,
+    interval: Optional[str] = "1d",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    auto_adjust: bool = True,
+    back_adjust: bool = False,
+) -> Dict[str, Any]:
     """
-    키워드와 연관 키워드가 포함된 네이버 뉴스 기사를 elastic search에서 검색하는 도구입니다.
-
-    ⚠️ 주의:
-        - 본 도구는 "오늘 날짜(오늘 00시 이후)" 기준 데이터는 사용할 수 없습니다.
-        - 뉴스 크롤링은 매일 자정(00:00) 기준으로 하루 단위 수집되므로,
-          가장 최근 사용 가능한 날짜는 "어제 날짜"입니다.
+    주식 티커에 대한 히스토리를 조회하는 도구
 
     Args:
-        keyword (str): 주 검색 키워드 (예: "AI")
-        relatedKeyword (str): 연관 검색 키워드 (예: "삼성")
-        date (str): 검색 기준 날짜 (YYYY-MM-DD)
-        page (int, optional): 페이지 번호 (기본값: 0)
+        symbol: 조회할 티커 심볼 (예: 'AAPL', 'LUMN')
+        period: 조회 기간 (예: '1d','5d','1mo','1y','max' 등). start/end와 동시에 사용할 수 없습니다.
+        interval: 데이터 간격 (예: '1m','5m','1h','1d','1wk','1mo' 등)
+        start: 조회 시작일 (YYYY-MM-DD), period 없이 사용 시 필수
+        end: 조회 종료일 (YYYY-MM-DD), start와 함께 사용
+        auto_adjust: 배당·분할 이후 가격 자동 보정 여부
+        back_adjust: 과거 가격 보정 여부
 
     Returns:
-        str: 연관 기사 검색 결과 JSON 문자열 (오류 발생 시 오류 메시지 포함)
+        {
+          "symbol": symbol,
+          "history": [  # 날짜별 OHLCV 리스트
+            {
+              "date": "2024-06-07",
+              "open": 123.45,
+              "high": 125.00,
+              "low": 122.80,
+              "close": 124.10,
+              "volume": 987654
+            },
+            ...
+          ],
+          "info": { ... },  # 회사 정보
+          "status": "success" or "failed",
+          "message": 실패 시 실패 메시지 (성공 시 null)
+        }
     """
+    # 기본 응답 구조
+    response = {
+        "symbol": symbol,
+        "history": [],
+        "info": {},
+        "status": "failed",
+        "message": None
+    }
 
-    cache_key = f"news:{keyword}:{relatedKeyword}:{date}:{page}"
-    r = get_redis_client()
-    # redis 캐시 조회
-    cached = r.get(cache_key)
-    if cached:
-        return cached
+    # 티커 심볼 검증
+    if not symbol or not symbol.strip():
+        response["message"] = "티커 심볼이 비어 있습니다."
+        return response
 
     try:
-        url = (f"http://localhost:8080/api/insight/related-search?"
-               f"keyword={keyword}&relatedKeyword={relatedKeyword}&date={date}&page={page}")
-        response = requests.get(url)
-        response.raise_for_status()
-        # redis 캐시 저장
-        r.set(cache_key, response.text)
-        return response.text
+        # Ticker 객체 생성
+        ticker = yf.Ticker(symbol)
+
+        # 기간 vs 날짜 범위 조회
+        if period and not (start or end):
+            df = ticker.history(
+                period=period,
+                interval=interval,
+                auto_adjust=auto_adjust,
+                back_adjust=back_adjust
+            )
+        else:
+            if not start or not end:
+                response["message"] = "start와 end 날짜를 모두 지정해야 합니다."
+                return response
+            df = ticker.history(
+                start=start,
+                end=end,
+                interval=interval,
+                auto_adjust=auto_adjust,
+                back_adjust=back_adjust
+            )
+
+        # 데이터가 비어 있는 경우 처리
+        if df.empty:
+            response["message"] = f"티커 '{symbol}'에 대한 데이터를 가져올 수 없습니다. 티커 심볼이 올바른지 확인하세요."
+            return response
+
+        # DataFrame → 리스트 of dict
+        records: List[Dict[str, Any]] = []
+        for idx, row in df.iterrows():
+            records.append({
+                "date": idx.strftime("%Y-%m-%d %H:%M:%S"),
+                "open": float(row["Open"]),
+                "high": float(row["High"]),
+                "low": float(row["Low"]),
+                "close": float(row["Close"]),
+                "volume": int(row["Volume"])
+            })
+
+        # ticker.info 안전하게 가져오기
+        try:
+            info = ticker.info or {}
+        except Exception as e:
+            print(f"회사 정보 가져오기 실패 ({symbol}): {str(e)}")
+            info = {}
+
+        # 성공 응답
+        response.update({
+            "history": records,
+            "info": info,
+            "status": "success",
+            "message": None
+        })
+        return response
+
     except Exception as e:
-        return f"연관 기사 검색 실패: {e}"
+        response["message"] = f"주식 데이터를 가져오는 데 실패했습니다: {str(e)}"
+        return response
 
 @tool
-async def get_stock_price(symbol: str) -> str:
-    """주어진 주식 심볼의 현재 가격을 가져옵니다."""
+@async_time_logger("kr_stock_history_tool")
+async def kr_stock_history_tool(
+    symbol: str,
+    period: Optional[str] = None,
+    interval: Optional[str] = "1d",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    한국 주식 티커에 대한 히스토리를 조회하는 도구
+
+    Args:
+        symbol: 조회할 티커 심볼 (예: '017670' for SK텔레콤)
+        period: 조회 기간 (예: '1d','5d','1mo','1y','max' 등). start/end와 동시에 사용할 수 없습니다.
+        interval: 데이터 간격 (현재는 '1d'만 지원)
+        start: 조회 시작일 (YYYY-MM-DD), period 없이 사용 시 필수
+        end: 조회 종료일 (YYYY-MM-DD), start와 함께 사용
+
+    Returns:
+        {
+          "symbol": symbol,
+          "history": [  # 날짜별 OHLCV 리스트
+            {
+              "date": "2025-04-24",
+              "open": 123.45,
+              "high": 125.00,
+              "low": 122.80,
+              "close": 124.10,
+              "volume": 987654
+            },
+            ...
+          ],
+          "info": {},  # 회사 정보 (미지원)
+          "status": "success" or "failed",
+          "message": 실패 시 실패 메시지 (성공 시 null)
+        }
+    """
+    # 기본 응답 구조
+    response = {
+        "symbol": symbol,
+        "history": [],
+        "info": {},  # FinanceDataReader는 회사 정보를 제공하지 않음
+        "status": "failed",
+        "message": None
+    }
+
+    # 티커 심볼 검증
+    if not symbol or not symbol.strip():
+        response["message"] = "티커 심볼이 비어 있습니다."
+        return response
+
+    # FinanceDataReader는 interval을 직접 지원하지 않으므로 1d로 고정
+    if interval != "1d":
+        response["message"] = "현재는 '1d' 간격만 지원합니다."
+        return response
+
     try:
-        stock = yf.Ticker(symbol)
-        current_price = stock.history(period="1d")['Close'].iloc[-1]
-        return f"{symbol}의 현재 가격은 {current_price}입니다."
+        # 날짜 설정
+        if period and not (start or end):
+            # period를 날짜 범위로 변환 (간단히 max로 설정 후 필터링)
+            df = fdr.DataReader(symbol, start='2000-01-01', end=datetime.now().strftime('%Y-%m-%d'))
+            # period에 따라 필터링 (예: '1d' → 최근 1일)
+            if period == '1d':
+                df = df.tail(1)
+            elif period == '5d':
+                df = df.tail(5)
+            elif period == '1mo':
+                df = df.tail(30)
+            elif period == '1y':
+                df = df.tail(365)
+            elif period == 'max':
+                pass  # 이미 전체 데이터
+            else:
+                response["message"] = f"지원하지 않는 period 값입니다: {period}"
+                return response
+        else:
+            if not start or not end:
+                response["message"] = "start와 end 날짜를 모두 지정해야 합니다."
+                return response
+            df = fdr.DataReader(symbol, start=start, end=end)
+
+        # 데이터가 비어 있는 경우 처리
+        if df.empty:
+            response["message"] = f"티커 '{symbol}'에 대한 데이터를 가져올 수 없습니다. 티커 심볼이 올바른지 확인하세요."
+            return response
+
+        # DataFrame → 리스트 of dict
+        records: List[Dict[str, Any]] = []
+        for idx, row in df.iterrows():
+            records.append({
+                "date": idx.strftime("%Y-%m-%d"),
+                "open": float(row["Open"]),
+                "high": float(row["High"]),
+                "low": float(row["Low"]),
+                "close": float(row["Close"]),
+                "volume": int(row["Volume"])
+            })
+
+        # 성공 응답
+        response.update({
+            "history": records,
+            "status": "success",
+            "message": None
+        })
+        return response
+
     except Exception as e:
-        return f"{symbol}의 주식 가격을 가져오지 못했습니다: {str(e)}"
+        response["message"] = f"주식 데이터를 가져오는 데 실패했습니다: {str(e)}"
+        return response
 
 @tool
+@async_time_logger("namuwiki_tool")
 async def namuwiki_tool(keyword: str) -> str:
     """
     나무위키 검색 도구
@@ -818,239 +1273,53 @@ async def namuwiki_tool(keyword: str) -> str:
     본문 텍스트 일부를 반환합니다. 나무위키는 크롤링을 통해 접근합니다.
 
     Args:
-        keyword (str): 검색 키워드 (예:'일론 머스크')
+        keyword (str): 검색 키워드
 
     Returns:
-        str: 요약된 나무위키 본문 (없거나 실패 시 오류 메시지)
+        str: 나무위키 본문 요약 텍스트 또는 오류 메시지
     """
 
     try:
         base_url = "https://namu.wiki"
-        search_url = f"{base_url}/w/{keyword.replace(' ', '%20')}"
-        headers = {"User-Agent": "Mozilla/5.0"}
+        encoded_keyword = quote(keyword)
+        headers = {"User-Agent": UserAgent().random}
 
-        response = requests.get(search_url, headers=headers, timeout=10)
-        response.raise_for_status()
+        # 직접 url 접근
+        direct_url = f"{base_url}/w/{encoded_keyword}"
+        response = requests.get(direct_url, headers=headers, timeout=10)
+        html = response.text
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        wiki_paragraphs = soup.find_all("div", class_="wiki-paragraph")
+        # HTML 파싱
+        soup = BeautifulSoup(html, "html.parser")
+        all_divs = soup.find_all("div")
 
-        if not wiki_paragraphs:
-            return f"'{keyword}'에 대한 나무위키 문서를 찾을 수 없습니다."
+        # 제거할 키워드 + 정규식 패턴 정의
+        irrelevant_keywords = [
+            "CC BY-NC-SA", "namu.wiki", "umanle S.R.L",
+            "Google Privacy Policy", "Términos de uso",
+            "문서 가져오기", "최근 수정 시각", "틀", "분류:",
+            "펼치기", "접기",
+            "편집 요청", "편집 권한이 부족합니다", "ACL 탭", "도움말"
+        ]
+        heading_pattern = re.compile(r"^\d+(\s*\.\s*\d+)*\s*\.")
 
-        extracted = []
-        for para in wiki_paragraphs:
-            text = para.get_text(separator=" ", strip=True)
-            if text:
+        extracted, seen = [], set()
+        for div in all_divs:
+            text = div.get_text(separator=" ", strip=True)
+            if (
+                text
+                and len(text) > 40
+                and text not in seen
+                and not any(bad in text for bad in irrelevant_keywords)
+                and not heading_pattern.match(text)
+            ):
                 extracted.append(text)
-            if len(extracted) >= 5:  # 상위 5개 문단만 추출
-                break
+                seen.add(text)
 
-        return "\n\n".join(extracted) if extracted else "본문이 비어 있습니다."
+        return "\n\n".join(extracted[:30]) if extracted else "본문이 비어 있습니다."
 
     except Exception as e:
         return f"[오류 발생] 나무위키 요청 실패: {str(e)}"
-
-
-# ------------------------
-# Deep Research 단계별 툴
-# ------------------------
-@tool
-async def planner_tool(topic: str, steps: int = 3) -> List[Dict[str, Any]]:
-    """
-    사용자의 주제에 대한 질문, 키워드 및 사용할 도구를 추천합니다.
-    각 도구에 대해 적합한 검색 키워드 및 도구를 제공합니다.
-    """
-    prompt_text = f"""
-    당신은 리서치 검색 툴의 planner입니다.
-    사용자의 주제: "{topic}"
-    아래의 조건에 맞게 질문과 그에 적합한 검색 키워드, 사용할 도구를 가능한 많이 추천하세요.
-    이 주제에 대해 검색할 수 있는 도구를 추천하고, 각 도구별 검색 특성을 반영하여 어떤 검색어를 사용해야 할지 반환해 주세요.
-
-    출력 형식 예시:
-    [
-      {{
-        "question": "삼성전자의 최신 기술은?",
-        "search_tools": [
-          {{
-            "search_tool": "wikipedia_tool",
-            "keyword": "삼성전자 최신 기술"
-          }},
-          {{
-            "search_tool": "rag_news_search_tool",
-            "keyword": "삼성전자 기술 2025"
-          }}
-        ]
-      }}
-    ]
-
-    사용 가능한 도구 목록:
-    - wikipedia_tool
-    - reddit_tool
-    - naver_blog_tool
-    - daum_blog_tool
-    - rag_news_search_tool
-    - search_web_tool
-    """
-
-    llm = ChatOpenAI(temperature=0, streaming=True)
-    chain = LLMChain(llm=llm, prompt=PromptTemplate.from_template("{prompt}"))
-    output = await chain.arun(prompt=prompt_text)
-
-    # 결과를 JSON 형식으로 파싱하여 반환
-    result = json.loads(output)
-
-    # 디버깅: result 내용 확인
-    print(f"[planner_tool] result: {result}")
-
-    # 데이터를 추출
-    final_result = []
-    for item in result:
-        question = item.get("question", "")
-        keyword = item.get("keyword", "")
-        search_tools = item.get("search_tools", [])
-
-        # 검색 도구별로 키워드 매핑 처리
-        search_tool_list = [{"search_tool": tool["search_tool"], "keyword": tool["keyword"]} for tool in search_tools]
-
-        # 최종 결과 생성
-        final_result.append({
-            "question": question,
-            "keyword": keyword,
-            "search_tools": search_tool_list
-        })
-
-    return final_result
-
-@tool
-async def summarizer_tool(content: Any, source: str = "") -> str:
-    """
-    웹/뉴스/블로그 등의 개별 콘텐츠를 요약하는 도구.
-    """
-    llm = ChatOpenAI(temperature=0, streaming=True)
-    prompt = PromptTemplate.from_template("""
-      당신은 리서치 검색 툴의 summarizer 입니다. 
-      당신의 역할은 각 소스에서 수집된 정보들을 가진 의미를 잃지 않으면서, 적절한 길이로 줄이는 것입니다.
-      다음은 [{source}]에서 수집한 문서입니다. 이 문서의 핵심 내용을 적절하게 요약하세요. 
-      전체 문장의 의미를 잃지 않도록 주의하고, 과도하게 내용을 축소하지 않도록 합니다. 
-      요약은 문서의 핵심 아이디어를 유지하며 작성해 주세요.
-  
-      문서 내용:
-      {content}
-  """)
-    chain = LLMChain(llm=llm, prompt=prompt)
-    return await chain.ainvoke({"content": content, "source": source})
-
-@tool
-async def analyzer_tool(context: str, question: str) -> str:
-    """
-    인사이트 추출 도구.
-
-    주어진 문서와 조사 질문을 바탕으로 사용자가 실제로 리서치에 활용할 수 있는
-    통찰력 있는 인사이트를 서술형 문단 형식으로 생성합니다.
-    """
-
-    llm = ChatOpenAI(streaming=True, temperature=0)
-
-    template = PromptTemplate.from_template("""
-    당신은 리서치 툴의 analyzer입니다.
-    당신의 역할은 주어진 문서들을 바탕으로 사용자가 실제로 리서치에 활용할 수 있는 통찰력 있는 인사이트를 서술하는 것입니다.
-    다음은 사용자가 제시한 질문과 이에 대한 참고 문서입니다.
-
-    [질문]
-    {question}
-
-    [문서]
-    {context}
-
-    위 정보를 바탕으로 다음을 수행하세요:
-
-    [요구사항]
-    - 질문에 대한 답변을 넘어서, 의미 있는 인사이트 2~3개를 추론해 작성합니다.
-    - 각 인사이트는 논리적 근거를 포함하며, 가능하면 문서에서 직접 인용합니다.
-    - 단순 정보 요약이 아닌 '해석', '비판적 분석', '의미 도출'을 포함해야 합니다.
-    - 전체 응답은 서술형 문단 형식으로 작성합니다.
-    - 리스트, 마크다운, 줄바꿈 없이 하나의 문단으로 작성합니다.
-
-    인사이트:
-    """)
-
-    chain = LLMChain(llm=llm, prompt=template)
-    return await chain.arun(context=context, question=question)
-
-
-@tool
-async def fact_check_tool(context: str) -> str:
-    """
-    콘텐츠 신뢰도 평가 도구.
-
-    주어진 기사나 웹 텍스트(context)에 포함된 주장이나 정보의 신뢰성을 평가합니다.
-
-    Args:
-        context (str): 기사 본문 또는 웹 페이지 텍스트
-
-    Returns:
-        str: 신뢰도 평가 결과 (사실 여부, 출처 확인, 신뢰 수준 등 포함)
-    """
-    llm = ChatOpenAI(streaming=True, temperature=0)
-    template = PromptTemplate.from_template("""
-    당신은 리서치 툴의 신뢰도 평가자입니다.
-    다음은 사용자가 수집한 웹 기사 또는 콘텐츠입니다:
-
-    [본문]
-    {context}
-
-    위 정보의 신뢰성을 다음 기준에 따라 평가하세요:
-    - 과학적 근거, 통계, 인용 등 신뢰 가능한 출처가 있는지 확인
-    - 음모론, 과장된 주장, 출처 미확인 정보는 경고
-    - 사실 여부 판단이 어려운 경우, 그 이유를 설명
-    - 종합적으로 이 콘텐츠의 신뢰 수준을 "높음 / 보통 / 낮음" 중 하나로 판단
-
-    출력 형식 예시:
-    - 신뢰 수준: 보통
-    - 근거: 출처가 명확하지 않지만 특정 사실은 확인됨
-    - 주의할 점: 일부 과장된 표현 존재
-    """)
-    chain = LLMChain(llm=llm, prompt=template)
-    return await chain.arun(context=context)
-
-@tool
-async def synthesizer_tool(insights: List[str]) -> str:
-    """
-    최종 보고서 작성 도구.
-
-    수집된 인사이트들을 기반으로 정식 리서치 보고서를 작성합니다.
-    [개요-본론-결론] 형식을 갖춘, 기업/정책/트렌드 리포트에 준하는 구조로 문서화합니다.
-    """
-
-    llm = ChatOpenAI(streaming=True, temperature=0)
-
-    combined = "\n".join(insights)
-
-    template = PromptTemplate.from_template("""
-    당신은 리서치 툴의 최종 보고서 작성자입니다.
-    수집된 인사이트들을 기반으로 리서치 보고서를 작성합니다.
-    
-    다음은 사용자가 조사한 주제에 대한 주요 인사이트 목록입니다:
-    
-    [인사이트 목록]
-    {content}
-
-    위 내용을 바탕으로 다음과 같은 형식의 보고서를 작성하세요.
-
-    [요구사항]
-    - 전체 구조는 '개요 → 본론 → 결론' 순으로 작성하세요.
-    - 개요: 전체 주제 및 조사 목적 요약
-    - 본론: 핵심 인사이트를 근거와 함께 서술 (논리 전개 필요)
-    - 결론: 요약 및 향후 시사점 또는 전망 포함
-    - 보고서 문체는 공적인 문서 형식으로 작성
-    - 마크다운, 기호, 줄번호 없이 일반 문단으로 작성
-
-    리포트:
-    """)
-
-    chain = LLMChain(llm=llm, prompt=template)
-    return await chain.arun(content=combined)
 
 @tool
 def generate_dalle3_enhanced(prompt: str) -> str:
@@ -1095,12 +1364,11 @@ def generate_dalle3_enhanced(prompt: str) -> str:
         print(f"DALL·E 생성 오류: {str(e)}")
         return f"이미지 생성 실패: {str(e)}"
 
-
 tools = [
-    rag_news_search_tool,
-    daum_blog_tool,
-    naver_blog_tool,
-    reddit_tool,
+    hybrid_news_search_tool,
+    gnews_search_tool,
+    newsapi_search_tool,
+    community_search_tool,
     search_web_tool,
     youtube_video_tool,
     request_url_tool,
@@ -1109,16 +1377,16 @@ tools = [
     google_trending_tool,
     generate_trend_report_tool,
     get_daily_news_trend_tool,
-    keyword_news_search_tool,
-    get_stock_price,
-    generate_dalle3_enhanced
+    namuwiki_tool,
+    stock_history_tool,
+    generate_dalle3_enhanced,
+    kr_stock_history_tool
 ]
 
 # 도구 분류
 news_tools = [
-    rag_news_search_tool,
+    hybrid_news_search_tool,
     get_daily_news_trend_tool,
-    keyword_news_search_tool,
     search_web_tool,
     wikipedia_tool,
     google_trending_tool,
@@ -1126,9 +1394,7 @@ news_tools = [
 ]
 
 community_tools = [
-    daum_blog_tool,
-    naver_blog_tool,
-    reddit_tool,
+    community_search_tool,
     youtube_video_tool,
     search_web_tool
 ]
@@ -1136,146 +1402,5 @@ community_tools = [
 common_tools = [
     request_url_tool,
     translation_tool,
-    get_stock_price
+    stock_history_tool
 ]
-
-# @tool
-# async def fintech_news_tool(keyword: str, max_results: int = 10) -> List[Dict[str, str]]:
-#     """핀테크 뉴스 검색 도구 (NewsAPI 및 RSS 대안)."""
-#     r = get_redis_client()
-#     cache_key = f"fintech_news:{keyword}:{max_results}"
-#     cached = r.get(cache_key)
-#     if cached:
-#         return json.loads(cached)
-#
-#     api_key = os.getenv("NEWSAPI_KEY")
-#     if api_key:
-#         url = f"https://newsapi.org/v2/everything?q={keyword}+fintech&apiKey={api_key}&language=en&sortBy=publishedAt"
-#         try:
-#             response = requests.get(url, timeout=10)
-#             response.raise_for_status()
-#             data = response.json()
-#             articles = data.get("articles", [])[:max_results]
-#             results = [
-#                 {
-#                     "title": article["title"],
-#                     "url": article["url"],
-#                     "description": article["description"] or "",
-#                     "published_at": article["publishedAt"]
-#                 }
-#                 for article in articles if article["title"]
-#             ]
-#             r.setex(cache_key, 3600, json.dumps(results))
-#             return results
-#         except Exception as e:
-#             print(f"NewsAPI 실패: {e}")
-#
-#     # RSS 대안 (Fintech Futures)
-#     try:
-#         rss_url = "https://fintechfutures.com/feed/"
-#         feed = feedparser.parse(rss_url)
-#         results = [
-#             {
-#                 "title": entry.title,
-#                 "url": entry.link,
-#                 "description": entry.summary or "",
-#                 "published_at": entry.published
-#             }
-#             for entry in feed.entries[:max_results] if keyword.lower() in entry.title.lower()
-#         ]
-#         r.setex(cache_key, 3600, json.dumps(results))
-#         return results
-#     except Exception as e:
-#         return [{"error": f"핀테크 뉴스 검색 실패: {str(e)}"}]
-#
-#
-# @tool
-# async def x_search_tool(keyword: str, max_results: int = 10) -> List[Dict[str, Union[str, int]]]:
-#     """X 플랫폼 포스트 검색 도구."""
-#     r = get_redis_client()
-#     cache_key = f"x_search:{keyword}:{max_results}"
-#     cached = r.get(cache_key)
-#     if cached:
-#         return json.loads(cached)
-#
-#     bearer_token = os.getenv("X_API_BEARER_TOKEN")
-#     if not bearer_token:
-#         print("X API Bearer Token이 설정되지 않았습니다. 웹 스크래핑 시도.")
-#         # 웹 스크래핑 대안 (법적 검토 필요)
-#         try:
-#             search_url = f"https://x.com/search?q={keyword}&src=typed_query"
-#             response = requests.get(search_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-#             response.raise_for_status()
-#             soup = BeautifulSoup(response.text, "html.parser")
-#             results = [
-#                 {
-#                     "text": "Sample post from X (scraped)",
-#                     "url": search_url,
-#                     "likes": 0,
-#                     "created_at": datetime.now().isoformat()
-#                 }
-#             ]
-#             r.setex(cache_key, 3600, json.dumps(results))
-#             return results
-#         except Exception as e:
-#             return [{"error": f"X 검색 실패: 스크래핑 실패: {str(e)}"}]
-#
-#     try:
-#         url = f"https://api.twitter.com/2/tweets/search/recent?query={keyword}&max_results={max_results}"
-#         headers = {"Authorization": f"Bearer {bearer_token}"}
-#         response = requests.get(url, headers=headers, timeout=10)
-#         response.raise_for_status()
-#         data = response.json()
-#         results = [
-#             {
-#                 "text": tweet["text"],
-#                 "url": f"https://x.com/i/status/{tweet['id']}",
-#                 "likes": tweet.get("public_metrics", {}).get("like_count", 0),
-#                 "created_at": tweet["created_at"]
-#             }
-#             for tweet in data.get("data", [])[:max_results]
-#         ]
-#         r.setex(cache_key, 3600, json.dumps(results))
-#         return results
-#     except Exception as e:
-#         return [{"error": f"X API 검색 실패: {str(e)}"}]
-#
-#
-# @tool
-# async def it_trends_google_trends_tool(query: str, startDate: str = None, endDate: str = None) -> Dict[
-#     str, Union[str, List[float], List[str]]]:
-#     """Google Trends 검색량 조회 도구."""
-#     r = get_redis_client()
-#     cache_key = f"google_trends:{query}:{startDate}:{endDate}"
-#     cached = r.get(cache_key)
-#     if cached:
-#         return json.loads(cached)
-#
-#     try:
-#         pytrends = TrendReq(hl="ko", tz=540)
-#         timeframe = f"{startDate} {endDate}" if startDate and endDate else "today 1-m"
-#         max_retries = 3
-#         for attempt in range(max_retries):
-#             try:
-#                 pytrends.build_payload([query], cat=0, timeframe=timeframe, geo="KR", gprop="")
-#                 trend_data = pytrends.interest_over_time()
-#                 if trend_data is None or trend_data.empty:
-#                     return {"error": f"No trending data found for '{query}'."}
-#                 interest_data = trend_data[query].dropna().tolist()
-#                 dates = trend_data.index.strftime('%Y-%m-%d').tolist()
-#                 results = {
-#                     "query": query,
-#                     "interest_data": interest_data,
-#                     "dates": dates
-#                 }
-#                 r.setex(cache_key, 86400, json.dumps(results))
-#                 return results
-#             except Exception as e:
-#                 if '429' in str(e) and attempt < max_retries - 1:
-#                     await asyncio.sleep(10)
-#                 else:
-#                     raise
-#     except Exception as e:
-#         return {"error": f"Google Trends 검색 실패: {str(e)}"}
-#
-#

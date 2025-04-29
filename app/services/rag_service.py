@@ -76,8 +76,12 @@ def extract_pdf(contents: bytes) -> str:
     text = ""
     with fitz.open(stream=contents, filetype="pdf") as doc:
         for page in doc:
-            text += page.get_text("text")  # 성능 가장 좋은 방식
-    return text.strip()
+            try:
+                page_text = page.get_text("text")
+                text += page_text
+            except Exception as e:
+                print(f"[ERROR] 페이지 텍스트 추출 실패: {e}")
+    return text.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore").strip()
 
 
 def extract_docx(contents: bytes) -> str:
@@ -94,7 +98,12 @@ def extract_hwp(contents: bytes) -> str:
     if not olefile.isOleFile(buffer):
         raise ValueError("올바르지 않은 HWP 파일입니다.")
     buffer.seek(0)
-    return extract_text_from_hwp_binary(buffer.read())
+    try:
+        raw_text = extract_text_from_hwp_binary(buffer.read())
+        return raw_text.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore").strip()
+    except Exception as e:
+        print(f"[ERROR] HWP 텍스트 추출 오류: {e}")
+        return ""
 
 
 def split_text(text: str, max_len: int = 2000) -> List[str]:
@@ -129,32 +138,3 @@ def delete_team_embedding(team_id: int, filename: str) -> int:
     collection = Collection("team_shared_files")
     result = collection.delete(expr)
     return result.delete_count
-
-#
-# from app.utils.milvus_util import connect_milvus
-# from pymilvus import Collection
-#
-# connect_milvus()
-# collection = Collection("team_shared_files")
-#
-# # ✅ 전체 데이터 보기 (빈 expr 금지 → 최소 조건 줘야 함)
-# all_data = collection.query(expr="team_id >= 0", output_fields=["filename", "team_id"])
-# print("[DEBUG] 전체 데이터:")
-# for row in all_data:
-#     print(row)
-#
-# # 삭제 조건 설정
-# filename = "in_class_activity_2_2019040519.pdf"
-# team_id = 30
-# expr = f'filename == "{filename}" and team_id == {team_id}'
-#
-# print(f"[DEBUG] expr = {expr}")
-#
-# # 삭제 대상 확인
-# data = collection.query(expr=expr, output_fields=["filename", "team_id"])
-# print("[DEBUG] 삭제 대상 사전 조회:")
-# print(data)
-#
-# # 삭제 실행
-# result = collection.delete(expr)
-# print(f"[DEBUG] 삭제 결과: {result.delete_count}")

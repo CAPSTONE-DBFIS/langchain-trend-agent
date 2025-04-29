@@ -101,7 +101,7 @@ if __name__ == "__main__":
 
             # Elasticsearch에 저장
             doc_id = article['url']  # URL을 고유한 id로 사용하여 중복 방지
-            es.index(index=os.getenv("ELASTICSEARCH_INDEX_NAME"), id=doc_id, document=doc)
+            es.index(index=os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME"), id=doc_id, document=doc)
 
         logging.info(f"Elasticsearch에 기사 저장 완료")
         print(f"Elasticsearch에 기사 저장 완료")
