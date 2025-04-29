@@ -78,14 +78,14 @@ def ensure_es_index_exists():
         }
         # 인덱스 생성
         es.indices.create(index=ES_INDEX, body=mappings)
-        logger.info(f"Elasticsearch 인덱스 '{ES_INDEX}' 생성 완료")
+        logger.info(f"Elasticsearch index '{ES_INDEX}' created successfully")
     else:
-        logger.info(f"Elasticsearch 인덱스 '{ES_INDEX}' 확인 완료")
+        logger.info(f"Elasticsearch index '{ES_INDEX}' already exists")
 
 def save_to_elasticsearch(articles):
     """스크래핑한 기사 데이터를 Elasticsearch에 저장합니다."""
     if not articles:
-        logger.warning("저장할 기사가 없습니다.")
+        logger.warning("No articles to save")
         return 0
     
     # 인덱스 존재 여부 확인
@@ -107,9 +107,9 @@ def save_to_elasticsearch(articles):
             if "url" in hit["_source"]:
                 existing_urls.add(hit["_source"]["url"])
                 
-        logger.info(f"이미 저장된 URL 수: {len(existing_urls)}")
+        logger.info(f"Number of existing URLs: {len(existing_urls)}")
     except Exception as e:
-        logger.error(f"[예외] 기존 URL 조회 오류: {str(e)}")
+        logger.error(f"[EXCEPTION] Error querying existing URLs: {str(e)}")
     
     # 새 기사만 저장
     success_count = 0
@@ -128,7 +128,7 @@ def save_to_elasticsearch(articles):
                 not article.get("image_url") or
                 article.get("title") == "제목 없음" or
                 article.get("content") == "본문 없음"):
-                logger.warning(f"[예외] 필수 정보 누락으로 기사 제외: {article.get('title', '제목 없음')}")
+                logger.warning(f"[EXCEPTION] Article excluded due to missing required fields: {article.get('title', 'No title')}")
                 skipped_count += 1
                 continue
             
@@ -145,17 +145,17 @@ def save_to_elasticsearch(articles):
             success_count += 1
                 
         except Exception as e:
-            logger.error(f"[예외] 기사 저장 오류: {article.get('url', '알 수 없는 URL')} - {str(e)}")
+            logger.error(f"[EXCEPTION] Error saving article: {article.get('url', 'Unknown URL')} - {str(e)}")
             skipped_count += 1
     
-    logger.info(f"ES 저장 완료: {success_count}개 기사 저장, {skipped_count}개 건너뜀")
+    logger.info(f"ES save completed: {success_count} articles saved, {skipped_count} skipped")
     return success_count
 
 def format_time(seconds):
     """초를 분:초 형식으로 변환합니다."""
     minutes = seconds // 60
     remaining_seconds = seconds % 60
-    return f"{int(minutes)}분 {int(remaining_seconds)}초"
+    return f"{int(minutes)}min {int(remaining_seconds)}sec"
 
 def main():
     """메인 함수: 해외 기사 스크래핑 및 키워드 분석을 실행합니다."""
@@ -165,68 +165,68 @@ def main():
     start_time = time.time()
     success = True
     
-    logger.info("===== 해외 기사 스크래핑 시작 =====")
+    logger.info("===== Foreign Article Scraping Started =====")
     
     try:
         # 스크래핑할 페이지 수 설정
         all_articles = []
         
         # 1. NYT 기사 스크래핑
-        logger.info("----- New York Times 스크래핑 시작 -----")
+        logger.info("----- New York Times Scraping Started -----")
         nyt_articles = nyt_start(1)
         all_articles.extend(nyt_articles)
-        logger.info(f"NYT 스크래핑 완료: {len(nyt_articles)}개 기사")
+        logger.info(f"NYT Scraping Completed: {len(nyt_articles)} articles")
         
         # 2. TechCrunch 기사 스크래핑
-        logger.info("----- TechCrunch 스크래핑 시작 -----")
+        logger.info("----- TechCrunch Scraping Started -----")
         techcrunch_articles = techcrunch_start(2)
         all_articles.extend(techcrunch_articles)
-        logger.info(f"TechCrunch 스크래핑 완료: {len(techcrunch_articles)}개 기사")
+        logger.info(f"TechCrunch Scraping Completed: {len(techcrunch_articles)} articles")
         
         # 3. Ars Technica 기사 스크래핑
-        logger.info("----- Ars Technica 스크래핑 시작 -----")
+        logger.info("----- Ars Technica Scraping Started -----")
         ars_technica_articles = ars_technica_start(1)
         all_articles.extend(ars_technica_articles)
-        logger.info(f"Ars Technica 스크래핑 완료: {len(ars_technica_articles)}개 기사")
+        logger.info(f"Ars Technica Scraping Completed: {len(ars_technica_articles)} articles")
         
         # 4. ZDNET 기사 스크래핑
-        logger.info("----- ZDNET 스크래핑 시작 -----")
+        logger.info("----- ZDNET Scraping Started -----")
         zdnet_articles = zdnet_start(3)
         all_articles.extend(zdnet_articles)
-        logger.info(f"ZDNET 스크래핑 완료: {len(zdnet_articles)}개 기사")
+        logger.info(f"ZDNET Scraping Completed: {len(zdnet_articles)} articles")
         
         # 5. 전체 스크래핑 결과 요약
-        logger.info(f"총 {len(all_articles)}개 기사 스크래핑 완료")
+        logger.info(f"Total of {len(all_articles)} articles scraped successfully")
         
         # 6. Elasticsearch에 저장
-        logger.info("----- Elasticsearch 저장 시작 -----")
+        logger.info("----- Elasticsearch Saving Started -----")
         saved_count = save_to_elasticsearch(all_articles)
         
         # 오늘 날짜 가져오기
         today = datetime.now().strftime("%Y-%m-%d")
         
         # 7. 키워드 빈도수 추출
-        logger.info("----- 키워드 빈도수 추출 시작 -----")
+        logger.info("----- Keyword Frequency Extraction Started -----")
         try:
             keyword_extractor = ForeignKeywordExtractor()
             keywords = keyword_extractor.process_date(today)
-            logger.info(f"키워드 빈도수 추출 완료: {len(keywords)}개 키워드")
+            logger.info(f"Keyword Frequency Extraction Completed: {len(keywords)} keywords")
         except Exception as e:
-            logger.error(f"[예외] 키워드 빈도수 추출 오류: {str(e)}")
+            logger.error(f"[EXCEPTION] Error extracting keyword frequencies: {str(e)}")
             success = False
         
         # 8. 연관 키워드 분석
-        logger.info("----- 연관 키워드 분석 시작 -----")
+        logger.info("----- Related Keyword Analysis Started -----")
         try:
             keyword_analyzer = ForeignKeywordAnalyzer()
             keyword_analyzer.analyze_date(today)
-            logger.info("연관 키워드 분석 완료")
+            logger.info("Related Keyword Analysis Completed")
         except Exception as e:
-            logger.error(f"[예외] 연관 키워드 분석 오류: {str(e)}")
+            logger.error(f"[EXCEPTION] Error analyzing related keywords: {str(e)}")
             success = False
     
     except Exception as e:
-        logger.error(f"[심각한 오류] 스크래핑 과정에서 예상치 못한 오류 발생: {str(e)}")
+        logger.error(f"[CRITICAL ERROR] Unexpected error during scraping process: {str(e)}")
         success = False
     
     # 실행 시간 계산
@@ -235,8 +235,8 @@ def main():
     formatted_time = format_time(execution_time)
     
     # 최종 결과 로깅
-    status = "성공" if success else "실패"
-    logger.info(f"===== 해외 기사 스크래핑 및 분석 {status} (총 소요시간: {formatted_time}) =====")
+    status = "SUCCESS" if success else "FAILED"
+    logger.info(f"===== Foreign Article Scraping and Analysis {status} (Total time: {formatted_time}) =====")
     
     return success
 
