@@ -162,13 +162,8 @@ def scrape_arstechnica_section(section_url):
         # 상세 페이지에서 title, date, 본문(desc) 추출
         details = extract_article_details(article_link, headers, category)
         if details:
-            # 유효성 검사: 제목, 본문, 이미지 URL이 모두 있어야 함
+            # 유효성 검사: 제목, 본문이 모두 있어야 함.
             if details["title"] == "제목 없음" or details["content"] == "본문 없음":
-                failed_count += 1
-                continue
-                
-            # 이미지 URL이 없는 경우도 제외
-            if not details["image_url"]:
                 failed_count += 1
                 continue
                 

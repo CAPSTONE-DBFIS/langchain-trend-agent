@@ -265,10 +265,6 @@ def nyt_article_scraper(urls):
 
                 # 이미지 URL 추출
                 image_url = extract_image_url(soup)
-                if not image_url:
-                    print(f"[예외] 이미지 URL을 찾을 수 없어 기사를 건너뜁니다: {url}")
-                    failed_count += 1
-                    continue
 
                 articles.append({
                     "category": category,

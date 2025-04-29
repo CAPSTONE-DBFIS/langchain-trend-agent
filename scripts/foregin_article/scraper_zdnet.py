@@ -254,8 +254,7 @@ def scrape_articles_from_page(page):
             
             # 이미지 URL 추출
             image_url = extract_image_url(container)
-            
-            # 이미지가 없는 경우 알림만 출력 (스킵하지 않음)
+
             if not image_url:
                 image_url = ""  # 빈 문자열로 설정
             else:
