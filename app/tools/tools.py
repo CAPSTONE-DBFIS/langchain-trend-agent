@@ -38,7 +38,7 @@ from langchain.chat_models import ChatOpenAI
 from langchain.chains.llm import LLMChain
 from langchain.tools import tool
 from langchain_community.tools import WikipediaQueryRun
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_tavily import TavilySearch
 from langchain_community.utilities import WikipediaAPIWrapper
 
 from app.utils.milvus_util import get_embedding_model, get_domestic_article_vector_store
@@ -68,6 +68,13 @@ async def rag_news_search(query: str, date_start: str, date_end: str) -> List[Di
     """
     Milvus에서 RAG를 이용한 의미 기반 IT 뉴스 기사 검색 도구 (기간 필터 포함).
     """
+    # redis 캐시 조회
+    r = get_redis_client()
+    cache_key = f"news:rag:{query}:{date_start}:{date_end}"
+    cached = r.get(cache_key)
+    if cached:
+        return json.loads(cached)
+
     embedding_model = get_embedding_model()
     vector_store = get_domestic_article_vector_store()
 
@@ -91,11 +98,19 @@ async def rag_news_search(query: str, date_start: str, date_end: str) -> List[Di
         for doc, score in results
     ]
 
-@async_time_logger("keyword_news_search")
+@async_time_logger("es_news_search")
 async def es_news_search(keyword: str, date_start: str, date_end: str) -> str:
     """
     Elasticsearch 뉴스 검색 도구 (기간 필터 포함).
     """
+
+    # redis 캐시 조회
+    r = get_redis_client()
+    cache_key = f"news:es:{keyword}:{date_start}:{date_end}"
+    cached = r.get(cache_key)
+    if cached:
+        return cached
+
     es = Elasticsearch(
         hosts=[f"http://{os.getenv('ELASTICSEARCH_HOST')}:{os.getenv('ELASTICSEARCH_PORT')}"],
         basic_auth=(os.getenv("ELASTICSEARCH_USERNAME"), os.getenv("ELASTICSEARCH_PASSWORD")),
@@ -163,10 +178,17 @@ async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = No
         • 기사 크롤링 주기는 하루 1 회(00:00). 따라서 “오늘자” 기사는 포함되지 않는다.
     """
     try:
+        # redis 캐싱
+        r = get_redis_client()
+        today = datetime.now().date()
         if not date_start or not date_end:
-            today = datetime.utcnow().date()
             date_start = (today - timedelta(days=365)).strftime("%Y-%m-%d")
             date_end = today.strftime("%Y-%m-%d")
+
+        cache_key = f"news:hybrid:{query}:{keyword}:{date_start}:{date_end}"
+        cached = r.get(cache_key)
+        if cached:
+            return json.loads(cached)
 
         es_task = es_news_search(keyword, date_start, date_end)
         rag_task = rag_news_search(query, date_start, date_end)
@@ -213,39 +235,47 @@ async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = No
     except Exception as e:
         return [{"error": f"하이브리드 뉴스 검색 실패: {str(e)}"}]
 
+from urllib.parse import quote
+import re
+
 @tool
 @async_time_logger("gnews_search_tool")
-async def gnews_search_tool(query: str, lang: str = "en", country: str = "en", max_results: int = 10) -> List[Dict[str, str]]:
+async def gnews_search_tool(query: str, lang: str = "en", country: str = "us", max_results: int = 10) -> List[Dict[str, str]]:
     """
     GNews API 해외 헤드라인 검색 도구
 
     When to use
-        • 영문·다국어 일반 뉴스를 빠르게 열람할 때
-        • 언론사명과 KST 변환 시각이 필요할 때
+        • 영문·다국어 키워드로 영문·다국어 일반 뉴스를 열람할 때
 
-    Args
-        query (str): 검색 키워드(영문 권장)
+    Args:
+        query (str): 검색 키워드 (예: 'cloud', 'AI', "cloud trends")
         lang (str, optional): ISO 639-1 언어 코드, 기본 'en'
-        country (str, optional): ISO 3166-1 알파-2 국가 코드, 기본 'en'
+        country (str, optional): ISO 3166-1 알파-2 국가 코드, 기본 'us'
         max_results (int, optional): 1-100, 기본 10
-    Returns
+
+    Returns:
         list[dict]: title, date(KST), media_company, url, content, source='GNews'
 
-    Notes
-        • 무료 플랜은 분당/일일 트래픽이 제한될 수 있다.
-        • 한국어 키워드는 정확도가 낮으므로 국내 뉴스는 hybrid_news_search_tool 사용 권장.
+    Notes:
+        • GNews는 다중 단어 입력 시 정확한 구문 검색을 위해 큰따옴표("...")를 사용해야 하며, 공백은 AND로 동작합니다.
+        • 특수문자 포함 또는 문장형 쿼리는 자동으로 escape 처리됩니다.
+        • 한국어 키워드는 정확도가 낮아 hybrid_news_search_tool 사용을 권장합니다.
     """
     try:
-        # GNews API 요청 URL 구성
-        api_key = os.getenv("GNEWS_API_KEY")  # .env 파일에 GNEWS_API_KEY 추가 필요
+        # API 키 확인
+        api_key = os.getenv("GNEWS_API_KEY")
         if not api_key:
             return [{"error": "GNews API 키가 설정되지 않았습니다. .env 파일에 GNEWS_API_KEY를 추가하세요."}]
 
-        max_results = min(max_results, 100)  # GNews API 최대 결과 수 제한
-        url = (
-            f"https://gnews.io/api/v4/search?"
-            f"q={quote(query)}&lang={lang}&country={country}&max={max_results}&apikey={api_key}"
-        )
+        # 검색어 전처리: 특수문자나 공백 포함 → 자동 "..." 감싸기
+        query = query.strip()
+        if re.search(r"[!?&=+/\- ]", query) and not (query.startswith('"') and query.endswith('"')):
+            query = f'"{query}"'
+        encoded_query = quote(query)
+
+        # 요청 URL 구성
+        max_results = min(max_results, 20)
+        url = f"https://gnews.io/api/v4/search?q={encoded_query}&lang={lang}&country={country}&max={max_results}&apikey={api_key}"
 
         # API 호출
         async with aiohttp.ClientSession() as session:
@@ -255,21 +285,20 @@ async def gnews_search_tool(query: str, lang: str = "en", country: str = "en", m
                     raise Exception(f"GNews API 요청 실패: {response.status} - {error_text}")
                 data = await response.json()
 
-        # 응답 데이터 확인
+        # 응답 파싱
         articles = data.get("articles", [])
         if not articles:
             return [{"error": f"'{query}'에 대한 최신 뉴스를 찾을 수 없습니다."}]
 
-        # GNews 응답을 LangChain 도구 형식으로 변환
         parsed_articles = []
         for article in articles:
             published_at = parser.parse(article["publishedAt"]).astimezone(KST).strftime("%Y-%m-%d %H:%M")
             parsed_articles.append({
-                "title": article["title"],
+                "title": article.get("title", ""),
                 "date": published_at,
                 "media_company": article["source"]["name"],
                 "url": article["url"],
-                "content": article["description"],
+                "content": article.get("content") or article.get("description") or "",
                 "source": "GNews"
             })
 
@@ -533,17 +562,18 @@ async def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, s
         keyword (str): 검색 키워드
         max_results (int, optional): 1-10, 기본 10
     Returns
-        list[dict]: Tavily 검색 결과 원본(JSON 구조 그대로)
+        list[dict]: Tavily 검색 결과 원본(Results:{0:)
 
     Notes
         • 결과에는 AI answer 필드가 포함될 수 있으나 신뢰도는 별도 검증 필요.
         • 깊이 있는 크롤링은 request_url_tool로 URL을 후속 조회해야 한다.
     """
 
-    tavily_tool = TavilySearchResults(
+    tavily_tool = TavilySearch(
         max_results=max_results,
         include_answer=True,
-        include_raw_content=True
+        include_raw_content=True,
+        search_depth='basic'
     )
     return tavily_tool.invoke({"query": keyword})
 
@@ -702,9 +732,17 @@ async def wikipedia_tool(query: str) -> str:
         • disambiguation 페이지는 첫 번째 항목으로 자동 선택될 수 있다.
         • 요약 길이 1500 자 제한, 원문 전문이 필요하면 request_url_tool 사용.
     """
+    # redis 캐싱
+    r = get_redis_client()
+
     # 한국어 우선, 실패 시 영어
     for lang in ["ko", "en"]:
         try:
+            cache_key = f"wiki:{lang}:{query}"
+            cached = r.get(cache_key)
+            if cached:
+                return cached
+
             # wiki_client로 wikipedia 모듈 전달
             api_wrapper = WikipediaAPIWrapper(
                 wiki_client=wikipedia,       # wikipedia-api 클라이언트
@@ -1244,7 +1282,6 @@ async def namuwiki_tool(keyword: str) -> str:
 
     When to use
         • 대중문화·밈·비공식 정보 등 Wikipedia에 없는 주제를 다룰 때
-        • HTML 구조가 잦은 광고·ACL 문구를 필터링한 깨끗한 텍스트가 필요할 때
 
     Args
         keyword (str): 검색 키워드
@@ -1253,8 +1290,13 @@ async def namuwiki_tool(keyword: str) -> str:
 
     Notes
         • 공식 API가 없으므로 레이아웃 변경 시 파서가 실패할 수 있다.
-        • 라이선스(CC BY-NC-SA) 텍스트·틀·분류 등 불필요 요소는 제거한다.
     """
+    # redis 캐싱
+    r = get_redis_client()
+    cache_key = f"namuwiki:{keyword}"
+    cached = r.get(cache_key)
+    if cached:
+        return cached
 
     try:
         base_url = "https://namu.wiki"
