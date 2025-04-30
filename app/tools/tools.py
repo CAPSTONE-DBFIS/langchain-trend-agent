@@ -141,37 +141,26 @@ async def es_news_search(keyword: str, date_start: str, date_end: str) -> str:
 @async_time_logger("hybrid_news_search_tool")
 async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = None, date_end: str = None) -> list:
     """
-    Elasticsearch + Milvus 병렬 하이브리드 네이버 IT 카테고리 뉴스 검색 도구
+    네이버 IT 카테고리 뉴스 통합 검색 도구 (Elasticsearch + Milvus)
 
-    이 함수는 두 가지 방식의 뉴스 검색을 병렬로 수행합니다:
+    When to use
+        • 국내 IT 뉴스에서 키워드 매칭 정확도와 의미 유사도(질문식)를 동시 활용하고 싶을 때
+        • 1년 이내 기사만, 또는 임의 기간 필터가 필요할 때
 
-    1. **Elasticsearch**: 키워드 기반의 문자열 검색
-    2. **Milvus (RAG)**: 임베딩 기반의 의미 유사도 검색 (질문 기반)
+    Args
+        query (str): 의미 기반 검색용 질문 문장
+        keyword (str): Elasticsearch 키워드 (단어·구문)
+        date_start (str, optional): YYYY-MM-DD, 기본값 최근 365 일 전
+        date_end   (str, optional): YYYY-MM-DD, 기본값 오늘
 
-    ### Args:
-    - query (str): 의미 기반 검색을 위한 질문 문장 (예: "AI가 기업 생산성에 미치는 영향은?")
-    - keyword (str): Elasticsearch용 주요 키워드 (예: "AI", "삼성", "반도체")
-    - date_start (str, optional): 검색 시작 날짜 (형식: YYYY-MM-DD). 지정하지 않으면 최근 365일 기준 자동 설정됨.
-    - date_end (str, optional): 검색 종료 날짜 (형식: YYYY-MM-DD). 지정하지 않으면 오늘 날짜 기준으로 자동 설정됨.
+    Returns
+        list[dict]: 중복 제거 후 스코어 내림차순 정렬된 기사 목록
+            title, date, media_company, url, content, score, source 필드 포함
 
-    ### 결과 항목
-    - title: 기사 제목
-    - date: 발행일
-    - media_company: 언론사
-    - url: 기사 링크
-    - content: 본문 요약 or 전체 본문
-    - score: 점수 (ES의 경우 `_score`, Milvus의 경우 유사도 점수)
-    - source: "Elasticsearch" 또는 "Milvus"
 
-    ### 사용 시 주의사항
-    - **뉴스 기사는 매일 자정에 자동 크롤링 및 업데이트**됩니다.
-      - 따라서 가장 최신 기사는 **"현재 시간 기준 하루 전"**입니다.
-    - Elasticsearch는 **UTC 기준 날짜**로 저장되며, 한국 기준 하루 차이 날 수 있습니다.
-    - Milvus는 의미 기반으로 질문을 벡터화하여 유사한 문서를 검색하며, 날짜 필터는 적용되지만 의미 정확도는 질문 문장 품질에 따라 달라질 수 있습니다.
-    - 반환 결과는 `url` 기준 중복 제거 후, `score` 기준으로 정렬됩니다.
-
-    Returns:
-        list: 뉴스 기사 결과 목록 (최대 10~20개, 중복 제거됨)
+    Notes
+        • Elasticsearch 결과가 우선 정렬된다(source='Elasticsearch' ⇒ 0).
+        • 기사 크롤링 주기는 하루 1 회(00:00). 따라서 “오늘자” 기사는 포함되지 않는다.
     """
     try:
         if not date_start or not date_end:
@@ -228,22 +217,23 @@ async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = No
 @async_time_logger("gnews_search_tool")
 async def gnews_search_tool(query: str, lang: str = "en", country: str = "en", max_results: int = 10) -> List[Dict[str, str]]:
     """
-    GNews API를 사용하여 해외 최신 뉴스를 검색하는 도구.
+    GNews API 해외 헤드라인 검색 도구
 
-    Args:
-        query (str): 검색할 영문 키워드 (예: "AI")
-        lang (str, optional): 뉴스 언어 (기본값: "en")
-        country (str, optional): 뉴스 지역 (기본값: "en")
-        max_results (int, optional): 최대 검색 결과 수 (기본값: 10, GNews 최대 100)
+    When to use
+        • 영문·다국어 일반 뉴스를 빠르게 열람할 때
+        • 언론사명과 KST 변환 시각이 필요할 때
 
-    Returns:
-        List[Dict[str, str]]: 뉴스 기사 목록
-            - title: 기사 제목
-            - date: 발행일 (YYYY-MM-DD HH:MM 형식, KST 기준)
-            - media_company: 언론사
-            - url: 기사 링크
-            - content: 기사 요약 (description)
-            - source: "GNews"
+    Args
+        query (str): 검색 키워드(영문 권장)
+        lang (str, optional): ISO 639-1 언어 코드, 기본 'en'
+        country (str, optional): ISO 3166-1 알파-2 국가 코드, 기본 'en'
+        max_results (int, optional): 1-100, 기본 10
+    Returns
+        list[dict]: title, date(KST), media_company, url, content, source='GNews'
+
+    Notes
+        • 무료 플랜은 분당/일일 트래픽이 제한될 수 있다.
+        • 한국어 키워드는 정확도가 낮으므로 국내 뉴스는 hybrid_news_search_tool 사용 권장.
     """
     try:
         # GNews API 요청 URL 구성
@@ -293,21 +283,22 @@ async def gnews_search_tool(query: str, lang: str = "en", country: str = "en", m
 @async_time_logger("newsapi_search_tool")
 async def newsapi_search_tool(query: str, lang: str = "en", max_results: int = 10) -> List[Dict[str, str]]:
     """
-    NewsAPI를 사용하여 해외 최신 뉴스를 검색하는 도구.
+    NewsAPI 해외 종합 뉴스 검색 도구
 
-    Args:
-        query (str): 검색할 영문 키워드 (예: "AI")
-        lang (str, optional): 뉴스 언어 (기본값: "en")
-        max_results (int, optional): 최대 검색 결과 수 (기본값: 10, NewsAPI 최대 100)
+    When to use
+        • 폭넓은 언어·매체에서 키워드 기반 최신 뉴스를 수집할 때
+        • 정렬 옵션(publishedAt)과 페이지 사이즈 제어가 필요할 때
 
-    Returns:
-        List[Dict[str, str]]: 뉴스 기사 목록
-            - title: 기사 제목
-            - date: 발행일 (YYYY-MM-DD HH:MM 형식, KST 기준)
-            - media_company: 언론사
-            - url: 기사 링크
-            - content: 기사 요약 (description)
-            - source: "NewsAPI"
+    Args
+        query (str): 검색 키워드(영문 권장)
+        lang (str, optional): ISO 639-1 언어 코드, 기본 'en'
+        max_results (int, optional): 1-100, 기본 10
+    Returns
+        list[dict]: title, date(KST), media_company, url, content, source='NewsAPI'
+
+    Notes
+        • 동일 키워드 연속 호출 시 rate-limit(HTTP 429) 가능성 있음.
+        • 비영어 기사도 지원하지만 언어 코드 정확히 지정해야 검색률이 높다.
     """
     try:
         # NewsAPI 요청 URL 구성
@@ -443,6 +434,40 @@ async def search_naver_blogs(keyword: str, max_result: int = 10) -> List[Dict[st
     except Exception as e:
         raise RuntimeError(f"Naver 블로그 검색 오류: {str(e)}")
 
+@tool
+@async_time_logger("community_search_tool")
+async def community_search_tool(korean_keyword: str, english_keyword: str, platform: str = "all", max_results: int = 10) -> List[Dict[str, str]]:
+    """
+    블로그·커뮤니티 통합 검색 도구 (Daum, Naver, Reddit)
+
+    When to use
+        • 키워드에 대한 국내 블로그 여론과 해외 Reddit 토론을 동시에 조사할 때
+        • 플랫폼별 결과를 시간순 정렬하여 비교하고 싶을 때
+
+    Args
+        korean_keyword (str): 한글 검색어(Daum·Naver)
+        english_keyword (str): 영어 검색어(Reddit)
+        platform (str, optional): 'daum' | 'naver' | 'reddit' | 'all', 기본 'all'
+        max_results (int, optional): 플랫폼별 최대 결과 수, 기본 10
+    Returns
+        list[dict]: title, url, contents, datetime(KST), source
+
+    Notes
+        • datetime 내림차순으로 반환되며, platform='all'이면 최대 3 배 결과가 될 수 있다.
+        • Reddit API는 토큰 만료가 빠르므로 10초 내 재호출 시 오류 가능.
+    """
+    tasks = []
+    if platform in ["all", "daum"]:
+        tasks.append(search_daum_blogs(korean_keyword, max_results))
+    if platform in ["all", "naver"]:
+        tasks.append(search_naver_blogs(korean_keyword, max_results))
+    if platform in ["all", "reddit"]:
+        tasks.append(search_reddit_posts(english_keyword, max_results))
+
+    results_nested = await asyncio.gather(*tasks)
+    results = [item for sublist in results_nested for item in sublist]
+    return sorted(results, key=lambda x: x["datetime"], reverse=True)[:max_results * (3 if platform == "all" else 1)]
+
 
 def get_reddit_access_token():
     """
@@ -495,59 +520,24 @@ async def search_reddit_posts(keyword: str, max_result: int = 10) -> List[Dict[s
 
 
 @tool
-@async_time_logger("community_search_tool")
-async def community_search_tool(korean_keyword: str, english_keyword: str, platform: str = "all", max_results: int = 10) -> List[Dict[str, str]]:
-    """
-    커뮤니티 통합 검색 도구
-
-    필수 입력:
-    - korean_keyword (str): 블로그 검색용 한글 키워드 (Daum, Naver용)
-    - english_keyword (str): Reddit 검색용 영어 키워드 (Reddit용)
-
-    선택 입력:
-    - platform (str): "daum", "naver", "reddit", "all" 중 선택 (기본: all)
-    - max_results (int): 각 플랫폼별 최대 검색 결과 수 (기본: 10)
-
-    Args:
-        korean_keyword (str): 한글 검색 키워드
-        english_keyword (str): 영어 검색 키워드
-        platform (str): "daum", "naver", "reddit", "all"
-        max_results (int): 각 플랫폼별 최대 검색 수
-
-    Returns:
-        List[Dict[str, str]]: 통합된 게시글 리스트
-            - title, url, contents, datetime (KST), source
-    """
-    tasks = []
-    if platform in ["all", "daum"]:
-        tasks.append(search_daum_blogs(korean_keyword, max_results))
-    if platform in ["all", "naver"]:
-        tasks.append(search_naver_blogs(korean_keyword, max_results))
-    if platform in ["all", "reddit"]:
-        tasks.append(search_reddit_posts(english_keyword, max_results))
-
-    results_nested = await asyncio.gather(*tasks)
-    results = [item for sublist in results_nested for item in sublist]
-    return sorted(results, key=lambda x: x["datetime"], reverse=True)[:max_results * (3 if platform == "all" else 1)]
-
-
-
-@tool
 @async_time_logger("search_web_tool")
 async def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, str]]:
     """
-    실시간 웹 검색 도구.
+    Tavily API 실시간 웹 페이지 검색 도구
 
-    Tavily Search API를 이용하여 실시간 웹 검색을 수행합니다.
+    When to use
+        • 빠른 일반 웹 검색이 필요하고, 자세한 본문이 필요한 경우 request_url_tool과 연계할 때
+        • 검색 엔진 결과를 JSON 형태로 즉시 받고 싶을 때
 
-    자세한 웹 페이지의 탐색을 위해 이후 request_url_tool을 호출해 탐색하는 것이 권장됩니다.
+    Args
+        keyword (str): 검색 키워드
+        max_results (int, optional): 1-10, 기본 10
+    Returns
+        list[dict]: Tavily 검색 결과 원본(JSON 구조 그대로)
 
-    Args:
-        keyword (str): 검색할 키워드
-        max_results (int, optional): 최대 검색 결과 수 (기본값: 10)
-
-    Returns:
-        List[Dict[str, str]]: 검색된 웹 페이지 목록
+    Notes
+        • 결과에는 AI answer 필드가 포함될 수 있으나 신뢰도는 별도 검증 필요.
+        • 깊이 있는 크롤링은 request_url_tool로 URL을 후속 조회해야 한다.
     """
 
     tavily_tool = TavilySearchResults(
@@ -562,23 +552,20 @@ async def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, s
 @async_time_logger("youtube_video_tool")
 async def youtube_video_tool(query: str, max_results: int = 5):
     """
-    커뮤니티 트렌드 - YouTube 동영상 검색 도구.
+    YouTube Data API 동영상 검색 도구
 
-    YouTube API를 사용하여 특정 키워드(query)와 관련된 동영상을 검색합니다.
+    When to use
+        • 특정 키워드와 관련된 최신·인기 영상을 확인하거나 트렌드 분석용 썸네일이 필요할 때
 
-    Args:
-        query (str): 검색할 키워드
-        max_results (int, optional): 최대 검색 결과 수 (기본값: 5)
+    Args
+        query (str): 검색 키워드
+        max_results (int, optional): 1-50, 기본 5
+    Returns
+        list[dict]: videoId, title, description, channelTitle, publishedAt, thumbnailUrl, videoUrl
 
-    Returns:
-        List[Dict[str, str]]: 검색된 동영상 목록
-            - "videoId" (str): YouTube 동영상 ID
-            - "title" (str): 동영상 제목
-            - "description" (str): 동영상 설명
-            - "channelTitle" (str): 채널 이름
-            - "publishedAt" (str): 업로드 날짜
-            - "thumbnailUrl" (str): 썸네일 이미지 URL
-            - "videoUrl" (str): 동영상 URL
+    Notes
+        • regionCode 고정을 KR로 두어 한국 인기 순위와 다를 수 있음.
+        • API 쿼터 초과 시 하루 제한(HTTP 403) 발생.
     """
     youtube = build("youtube", "v3", developerKey=os.getenv("YOUTUBE_API_KEY"))
 
@@ -609,16 +596,20 @@ async def youtube_video_tool(query: str, max_results: int = 5):
 @async_time_logger("request_url_tool")
 async def request_url_tool(input_url: str) -> str | None:
     """
-    웹페이지 또는 PDF 문서에서 텍스트를 추출하는 도구.
+    웹/PDF 원문 텍스트 추출 도구
 
-    주어진 URL에서 HTML 본문 또는 PDF 텍스트를 가져옵니다.
-    유효한 SSL 인증서가 없는 경우 접근하지 않습니다.
+    When to use
+        • 특정 URL의 본문을 장문으로 읽어야 할 때
+        • 후속 요약·번역·분석을 위한 원본 텍스트가 필요할 때
 
-    Args:
-        input_url (str): 요청할 웹 페이지 또는 PDF 파일의 URL
+    Args
+        input_url (str): HTTP(S) 웹 페이지 또는 PDF 파일의 절대 URL
+    Returns
+        str | None: 추출된 텍스트, 100 자 미만이면 None 반환
 
-    Returns:
-        str: 추출된 텍스트
+    Notes
+        • SSL 인증서 오류 시 안전 이유로 차단한다.
+        • PDF는 pypdf 를 사용해 텍스트 추출; 이미지·스캔 PDF는 지원하지 않는다.
     """
     headers = {
         "User-Agent": (
@@ -668,17 +659,19 @@ async def request_url_tool(input_url: str) -> str | None:
 @async_time_logger("translation_tool")
 async def translation_tool(asking: str) -> str:
     """
-    ChatGPT를 이용한 번역 도구.
+    GPT-4o 기반 단문 번역 도구
 
-    입력된 문장을 특정 언어로 번역합니다.
-    프롬프트 형식: "what is the '...' in <language>?"
-    예: "what is the 'hello my friend!' in Spanish?"
+    When to use
+        • 한두 문장의 정확한 번역이 필요할 때
+        • 다국어 예문 학습·비교 목적
 
-    Args:
-        asking (str): 번역할 문장이 포함된 질문
+    Args
+        asking (str): "what is the '...' in <language>?" 형태 질문
+    Returns
+        str: GPT 응답(Thinking : … 형식)
 
-    Returns:
-        str: 번역된 문장을 포함한 응답
+    Notes
+        • 길이가 긴 문단·형식 문서는 품질 저하 가능, 전문 번역엔 권장하지 않는다.
     """
 
     try:
@@ -694,16 +687,20 @@ async def translation_tool(asking: str) -> str:
 @async_time_logger("wikipedia_tool")
 async def wikipedia_tool(query: str) -> str:
     """
-    Wikipedia 검색 도구.
+    위키피디아 문서 요약 도구 (한국어 우선)
 
-    한국어 Wikipedia에서 입력된 키워드(query)와 관련된 문서를 검색하고 요약을 제공합니다.
-    한국어 문서가 없으면 영어로 대체된 결과가 반환됩니다.
+    When to use
+        • 공식·학술적인 개념 정의가 필요할 때
+        • 한국어 문서가 없으면 영어 대체 요약을 자동 수신하고 싶을 때
 
-    Args:
-        query (str): 검색할 키워드
+    Args
+        query (str): 검색 키워드
+    Returns
+        str: 최대 5 문장 요약 또는 오류 메시지
 
-    Returns:
-        str: 검색된 Wikipedia 문서 요약 (최대 5문장) 또는 오류 메시지
+    Notes
+        • disambiguation 페이지는 첫 번째 항목으로 자동 선택될 수 있다.
+        • 요약 길이 1500 자 제한, 원문 전문이 필요하면 request_url_tool 사용.
     """
     # 한국어 우선, 실패 시 영어
     for lang in ["ko", "en"]:
@@ -731,20 +728,22 @@ async def wikipedia_tool(query: str) -> str:
 @async_time_logger("google_trending_tool")
 async def google_trending_tool(query: str, start_date: str = None, end_date: str = None) -> Dict[str, Union[str, List[float], List[str]]]:
     """
-    Google Trends 키워드 검색 도구.
+    Google Trends 키워드 관심도 시계열 조회 도구
 
-    특정 키워드(query)에 대한 Google Trends 검색량 변화를 조회합니다.
+    When to use
+        • 검색량 변화를 데이터 포인트로 시각화·보고서 작성 시
+        • 특정 기간(최대 최근 5년)을 지정해 국내(KR) 트렌드만 비교할 때
 
-    Args:
-        query (str): 검색할 키워드
-        start_date (str, optional): 검색 시작 날짜 (YYYY-MM-DD 형식, 기본값: 최근 1개월)
-        end_date (str, optional): 검색 종료 날짜 (YYYY-MM-DD 형식)
+    Args
+        query (str): 검색 키워드
+        start_date (str, optional): YYYY-MM-DD, 기본 최근 한 달
+        end_date   (str, optional): YYYY-MM-DD
+    Returns
+        dict: {'query', 'interest_data': List[float], 'dates': List[str]} 또는 error
 
-    Returns:
-        Dict[str, Union[str, List[float], List[str]]]: 트렌드 검색 결과
-            - "query" (str): 검색한 키워드
-            - "interest_data" (List[float]): 검색량 변화 데이터
-            - "dates" (List[str]): 해당 날짜 목록 (YYYY-MM-DD)
+    Notes
+        • Google Trends 빈도가 낮은 키워드는 데이터가 비어 있을 수 있다.
+        • pytrends API는 호출 과다 시 429 응답 반환.
     """
     try:
         from pytrends.request import TrendReq
@@ -784,22 +783,20 @@ async def google_trending_tool(query: str, start_date: str = None, end_date: str
 @async_time_logger("generate_trend_report_tool")
 async def generate_trend_report_tool(search_date: str = None) -> str:
     """
-    트렌드 레포트 생성 도구.
-    DB에 저장된 날짜별 네이버 IT 뉴스 상위 키워드를 기반으로 Milvus에서 관련 뉴스를 검색하고,
-    GPT를 통해 종합적인 트렌드 분석 보고서를 생성합니다.
+    네이버 IT 뉴스 기반 일일 트렌드 보고서 생성 도구
 
-    ⚠️ 주의:
-        - 본 도구는 "오늘 날짜(오늘 00시 이후)" 기준 데이터는 사용할 수 없습니다.
-        - 뉴스 크롤링은 매일 자정(00:00) 기준으로 하루 단위 수집되므로,
-          가장 최근 사용 가능한 날짜는 "어제 날짜"입니다.
-        - Redis 캐시로 7일간 보고서 재사용 가능
+    When to use
+        • 지정일(최신 n-1일) 기준 키워드 빈도와 RAG 기사 내용을 종합 분석해야 할 때
+        • Word (docx) 형식의 그래프 포함 보고서를 S3 URL로 받아야 할 때
 
-    Args:
-        search_date (str, optional): 보고서를 생성할 날짜 (예: '2025-03-12').
-                                     기본값은 오늘 날짜 기준 어제(n-1일)로 자동 설정됩니다.
+    Args
+        search_date (str, optional): YYYY-MM-DD, 기본 어제
+    Returns
+        str: 보고서 S3 presigned URL 또는 상태 메시지
 
-    Returns:
-        str: 트렌드 인사이트 보고서가 저장된 Amazon S3 presigned URL
+    Notes
+        • 오늘 날짜(00시 이후) 데이터는 크롤링 완료 전이라 생성 불가.
+        • Redis 캐시 7 일, 동일 날짜 재요청 시 즉시 URL 반환.
     """
 
     kst = ZoneInfo("Asia/Seoul")
@@ -1002,20 +999,19 @@ def upload_report_to_spring(file_path: str):
 @async_time_logger("get_daily_news_trend_tool")
 async def get_daily_news_trend_tool(date: str) -> str:
     """
-    Spring API를 이용해 일간 트렌드 정보를 가져오는 도구.
+    Spring API 일간 트렌드 키워드·뉴스 데이터 조회 도구
 
-    특정 날짜의 네이버 IT 뉴스 기사 상위 키워드와 각 키워드의 연관 키워드, 뉴스 기사 데이터를 가져옵니다.
+    When to use
+        • 특정 날짜 네이버 IT 뉴스 상위 키워드와 연관 기사를 구조화 데이터로 가져올 때
 
-    ⚠️ 주의:
-        - 본 도구는 "오늘 날짜(오늘 00시 이후)" 기준 데이터는 사용할 수 없습니다.
-        - 뉴스 크롤링은 매일 자정(00:00) 기준으로 하루 단위 수집되므로,
-          가장 최근 사용 가능한 날짜는 "어제 날짜"입니다.
+    Args
+        date (str): YYYY-MM-DD
+    Returns
+        str: JSON 문자열 (Spring API 원본) 또는 오류 메시지
 
-    Args:
-        date (str): 조회 날짜 (YYYY-MM-DD)
-
-    Returns:
-        str: 트렌드 리포트 데이터 JSON 문자열 (오류 발생 시 오류 메시지 포함)
+    Notes
+        • 오늘 날짜 데이터는 제공되지 않는다.
+        • Redis 캐시가 있으면 즉시 반환하여 Spring API 호출 수를 절약한다.
     """
     # redis 캐시 조회
     r = get_redis_client()
@@ -1047,35 +1043,23 @@ async def stock_history_tool(
     back_adjust: bool = False,
 ) -> Dict[str, Any]:
     """
-    주식 티커에 대한 히스토리를 조회하는 도구
+    미국·글로벌 주식 OHLCV 조회 도구 (yfinance)
 
-    Args:
-        symbol: 조회할 티커 심볼 (예: 'AAPL', 'LUMN')
-        period: 조회 기간 (예: '1d','5d','1mo','1y','max' 등). start/end와 동시에 사용할 수 없습니다.
-        interval: 데이터 간격 (예: '1m','5m','1h','1d','1wk','1mo' 등)
-        start: 조회 시작일 (YYYY-MM-DD), period 없이 사용 시 필수
-        end: 조회 종료일 (YYYY-MM-DD), start와 함께 사용
-        auto_adjust: 배당·분할 이후 가격 자동 보정 여부
-        back_adjust: 과거 가격 보정 여부
+    When to use
+        • 미국 상장사 혹은 해외 ETF 가격 히스토리가 필요할 때
+        • 배당 조정·분할 보정(auto_adjust) 옵션을 사용하고 싶을 때
 
-    Returns:
-        {
-          "symbol": symbol,
-          "history": [  # 날짜별 OHLCV 리스트
-            {
-              "date": "2024-06-07",
-              "open": 123.45,
-              "high": 125.00,
-              "low": 122.80,
-              "close": 124.10,
-              "volume": 987654
-            },
-            ...
-          ],
-          "info": { ... },  # 회사 정보
-          "status": "success" or "failed",
-          "message": 실패 시 실패 메시지 (성공 시 null)
-        }
+    Args
+        symbol (str): 티커 심볼
+        period | start/end: 조회 범위 지정 (둘 중 하나)
+        interval (str, optional): 1m-1mo, 기본 '1d'
+        auto_adjust (bool): 배당·분할 보정 여부, 기본 True
+    Returns
+        dict: {'history': List[OHLCV], 'info': company_info, 'status', 'message'}
+
+    Notes
+        • yfinance는 실시간 데이터가 아니며 최대 15분 지연.
+        • Invalid symbol 입력 시 df.empty → status='failed' 로 반환.
     """
     # 기본 응답 구조
     response = {
@@ -1162,33 +1146,22 @@ async def kr_stock_history_tool(
     end: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    한국 주식 티커에 대한 히스토리를 조회하는 도구
+    한국 주식 OHLCV 조회 도구 (FinanceDataReader)
 
-    Args:
-        symbol: 조회할 티커 심볼 (예: '017670' for SK텔레콤)
-        period: 조회 기간 (예: '1d','5d','1mo','1y','max' 등). start/end와 동시에 사용할 수 없습니다.
-        interval: 데이터 간격 (현재는 '1d'만 지원)
-        start: 조회 시작일 (YYYY-MM-DD), period 없이 사용 시 필수
-        end: 조회 종료일 (YYYY-MM-DD), start와 함께 사용
+    When to use
+        • KRX/코스닥 종목 일간 가격 데이터를 받아야 할 때
+        • 해외 API 대신 국내 공개 데이터 소스를 활용하고 싶을 때
 
-    Returns:
-        {
-          "symbol": symbol,
-          "history": [  # 날짜별 OHLCV 리스트
-            {
-              "date": "2025-04-24",
-              "open": 123.45,
-              "high": 125.00,
-              "low": 122.80,
-              "close": 124.10,
-              "volume": 987654
-            },
-            ...
-          ],
-          "info": {},  # 회사 정보 (미지원)
-          "status": "success" or "failed",
-          "message": 실패 시 실패 메시지 (성공 시 null)
-        }
+    Args
+        symbol (str): 6자리 숫자 티커(예: '005930')
+        period | start/end: 조회 범위 지정
+        interval (str, optional): 현재 '1d' 고정
+    Returns
+        dict: history, info(빈 dict), status, message
+
+    Notes
+        • FinanceDataReader는 회사 프로필을 제공하지 않는다.
+        • interval != '1d' 요청 시 status='failed'.
     """
     # 기본 응답 구조
     response = {
@@ -1267,16 +1240,20 @@ async def kr_stock_history_tool(
 @async_time_logger("namuwiki_tool")
 async def namuwiki_tool(keyword: str) -> str:
     """
-    나무위키 검색 도구
+    나무위키 본문 크롤링·요약 도구
 
-    입력된 키워드(query)에 해당하는 나무위키 문서를 검색하고,
-    본문 텍스트 일부를 반환합니다. 나무위키는 크롤링을 통해 접근합니다.
+    When to use
+        • 대중문화·밈·비공식 정보 등 Wikipedia에 없는 주제를 다룰 때
+        • HTML 구조가 잦은 광고·ACL 문구를 필터링한 깨끗한 텍스트가 필요할 때
 
-    Args:
+    Args
         keyword (str): 검색 키워드
+    Returns
+        str: 본문 요약(최대 30 단락) 또는 오류 메시지
 
-    Returns:
-        str: 나무위키 본문 요약 텍스트 또는 오류 메시지
+    Notes
+        • 공식 API가 없으므로 레이아웃 변경 시 파서가 실패할 수 있다.
+        • 라이선스(CC BY-NC-SA) 텍스트·틀·분류 등 불필요 요소는 제거한다.
     """
 
     try:
@@ -1324,13 +1301,19 @@ async def namuwiki_tool(keyword: str) -> str:
 @tool
 def generate_dalle3_enhanced(prompt: str) -> str:
     """
-    GPT-4o-mini로 프롬프트를 보완한 뒤, DALL·E 3 API로 이미지 생성
+    DALL·E 3 이미지 생성용 프롬프트 리라이팅 도구
 
-    Args:
-        prompt (str): 사용자 입력 프롬프트
+    When to use
+        • 사용자 러프 프롬프트를 영어 시각 묘사 중심으로 보강한 뒤 이미지를 생성할 때
 
-    Returns:
-        str: 생성된 이미지 URL 또는 오류 메시지
+    Args
+        prompt (str): 원본 프롬프트(자연어)
+    Returns
+        str: 생성 이미지 URL 또는 오류 메시지
+
+    Notes
+        • GPT-4o-mini → DALL·E 3 두 단계 호출이므로 평균 10-15초 소요.
+        • DALLE_API_KEY 누락 시 즉시 오류 메시지를 반환한다.
     """
 
     openai.api_key = os.getenv("DALLE_API_KEY")
