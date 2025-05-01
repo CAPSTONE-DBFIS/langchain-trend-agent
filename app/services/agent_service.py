@@ -1,5 +1,3 @@
-import asyncio
-
 from fastapi.responses import StreamingResponse
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_tool_calling_agent, AgentExecutor
@@ -8,14 +6,14 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain.prompts import MessagesPlaceholder, PromptTemplate
 from langchain.chains.llm import LLMChain
-
 from langchain.callbacks.streaming_aiter import AsyncIteratorCallbackHandler
-
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
 import json
 import logging
+import re
+import asyncio
+from urllib.parse import urlparse
 
 from app.tools.tools import tools
 from app.utils.db_util import get_session_history, get_user_persona, save_chat_to_db, update_chatroom_name_if_first
@@ -56,7 +54,6 @@ class AgentChatService:
 
         chat_history = get_session_history(chat_room_id)
         persona_name, persona_prompt = get_user_persona(persona_id, member_id)
-        # 채팅방의 첫 메시지의 경우 해당 메시지를 기반으로 채팅방의 이름을 변경
         if not chat_history.messages:
             async def summarize_and_rename():
                 try:
@@ -73,7 +70,6 @@ class AgentChatService:
             elif isinstance(msg, AIMessage):
                 memory.chat_memory.add_ai_message(msg.content)
 
-        # KST 기준 현재 시간 가져오기
         now = datetime.now(ZoneInfo("Asia/Seoul"))
         current_datetime = now.strftime("%A, %B %-d, %Y at %-I:%M %p (KST)")
         system_prompt = rf"""
@@ -128,8 +124,7 @@ class AgentChatService:
 
         ## Response Types and Tool Usage
         - **Always call `search_web_tool` first** for all queries, regardless of the type. Only if `search_web_tool` fails to provide relevant information should you proceed to use other tools.
-        
-        
+
         ### News
         - Use (in parallel): `hybrid_news_search_tool`, `gnews_search_tool`, `newsapi_search_tool`, `search_web_tool`
         - Summarize **recent events, announcements, and verifiable facts** with minimal speculation.
@@ -137,7 +132,7 @@ class AgentChatService:
         - **Focus on answering:** What happened? When? Who was involved?
         - Emphasize **objective descriptions**. Do not predict, judge, or hypothesize unless explicitly stated.
         - Minimum two full sentences per item. Group related news when necessary.
-        
+
         ### Industry Trends
         - Use (in parallel): `hybrid_news_search_tool`, `gnews_search_tool`, `newsapi_search_tool`, `search_web_tool`, `google_trending_tool`, `get_daily_news_trend_tool`
         - Analyze **patterns across multiple news sources** to identify trends, shifts, and emerging issues in the industry.
@@ -205,9 +200,11 @@ class AgentChatService:
         )
 
         final_response = ""
+        collected_links = []  # 중복 URL 방지를 위한 리스트
+        link_map = {}  # URL을 인덱스로 매핑
 
         async def event_generator():
-            nonlocal final_response
+            nonlocal final_response, collected_links, link_map
             final_sent = False
             try:
                 async for event in executor.astream_events({"input": query}, version="v1"):
@@ -230,10 +227,60 @@ class AgentChatService:
                     elif kind == "on_tool_start":
                         yield f"data: {json.dumps({'tool_start': f'{name} 호출', 'input': data.get('input', {})}, ensure_ascii=False)}\n\n"
 
+                    elif kind == "on_tool_end":
+                        observation = data.get("output", "")
+                        # 문자열이면 JSON 파싱
+                        if isinstance(observation, str):
+                            try:
+                                observation = json.loads(observation)
+                            except json.JSONDecodeError:
+                                observation = []
+                        # 특정 도구들(Tavily 등)은 'results' 내부를 가져옴
+                        if isinstance(observation, dict):
+                            if "results" in observation and isinstance(observation["results"], list):
+                                observation = observation["results"]
+                            else:
+                                # dict인데 구조가 리스트 아니면 무시
+                                observation = []
+                        # 최종적으로 리스트가 아니면 무시
+                        if not isinstance(observation, list):
+                            observation = []
+                        if observation:
+                            yield f"data: {json.dumps({'log': f'결과: {observation}'}, ensure_ascii=False)}\n\n"
+                            for item in observation:
+                                if isinstance(item, dict) and ("url" in item or "videoUrl" in item):
+                                    url = item.get("url") or item.get("videoUrl")
+                                    if url and url not in link_map:
+                                        link_map[url] = len(collected_links) + 1
+                                        content = item.get("content") or item.get("contents") or item.get(
+                                            "description") or ""
+                                        title = item.get("title")
+                                        source = item.get("source", "Unknown")
+                                        # title 보완
+                                        if not title:
+                                            if content:
+                                                first_sentence = re.split(r'[.!?]', content.strip())[0][:50]
+                                                title = first_sentence + ("..." if len(first_sentence) > 50 else "")
+                                            else:
+                                                try:
+                                                    domain = urlparse(url).hostname or source
+                                                    title = f"Content from {domain}"
+                                                except:
+                                                    title = f"{source} Source {link_map[url]}"
+                                        collected_links.append({
+                                            "id": link_map[url],
+                                            "url": url,
+                                            "title": title,
+                                            "content": content[:200] + ("..." if len(content) > 200 else "")
+                                        })
+                                # links 이벤트 전송
+                                if collected_links:
+                                    yield f"data: {json.dumps({'links': collected_links, 'link_count': len(collected_links)}, ensure_ascii=False)}\n\n"
+
                     elif kind == "on_chain_end" and name == "AgentExecutor" and not final_sent:
                         output = data.get("output", {}).get("output", "")
                         if output:
-                            final_response = output  # 덮어쓰기 (최종 output이 더 정확)
+                            final_response = output
                             yield f"data: {json.dumps({'final': output}, ensure_ascii=False)}\n\n"
                             final_sent = True
 
@@ -241,11 +288,6 @@ class AgentChatService:
                         thought = data.get("action", {}).get("log", "")
                         if thought:
                             yield f"data: {json.dumps({'log': thought}, ensure_ascii=False)}\n\n"
-
-                    elif kind == "on_tool_end":
-                        observation = data.get("output", "")
-                        if observation:
-                            yield f"data: {json.dumps({'log': f'결과: {observation}'}, ensure_ascii=False)}\n\n"
 
             except Exception as e:
                 yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
