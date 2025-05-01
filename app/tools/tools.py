@@ -1341,9 +1341,10 @@ async def namuwiki_tool(keyword: str) -> str:
         return f"[오류 발생] 나무위키 요청 실패: {str(e)}"
 
 @tool
-def generate_dalle3_enhanced(prompt: str) -> str:
+@async_time_logger("dalle3_image_generation_tool")
+async def dalle3_image_generation_tool(prompt: str) -> str:
     """
-    DALL·E 3 이미지 생성용 프롬프트 리라이팅 도구
+    DALL·E 3 이미지 생성용 프롬프트 보조 + 이미지 생성 도구
 
     When to use
         • 사용자 러프 프롬프트를 영어 시각 묘사 중심으로 보강한 뒤 이미지를 생성할 때
@@ -1364,17 +1365,23 @@ def generate_dalle3_enhanced(prompt: str) -> str:
         llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.7)
 
         template = PromptTemplate.from_template("""
-            You are a prompt engineer for DALL·E 3.
-            Rewrite the following prompt in **English**, with vivid, concrete visual details:
+            You are an expert prompt engineer for DALL·E 3.
+            Rewrite the following description in **English**, adding vivid, concrete visual details.
+
+            Instructions:
+            - Describe the **scene**, **characters/objects**, and **background**.
+            - Specify a **style** (e.g., photorealistic, watercolor, cyberpunk).
+            - Add a **mood/atmosphere** and, if relevant, **lighting** (e.g., warm sunlight, neon glow).
+            - If possible, suggest a **camera angle** (e.g., wide shot, close-up).
+
+            Original prompt:
             "{prompt}"
-            Avoid abstract language. Keep it concise and realistic.
-            """)
+
+            Output a detailed prompt of 50-100 words in English.
+        """)
 
         formatted_prompt = template.format(prompt=prompt)
         enhanced_prompt = llm.invoke(formatted_prompt)
-
-        # 프롬프트 확인용
-        # print("GPT 보완 프롬프트:", enhanced_prompt.content)
 
         dalle_response = openai.images.generate(
             model="dall-e-3",
@@ -1388,6 +1395,189 @@ def generate_dalle3_enhanced(prompt: str) -> str:
     except Exception as e:
         print(f"DALL·E 생성 오류: {str(e)}")
         return f"이미지 생성 실패: {str(e)}"
+
+@tool
+@async_time_logger("weather_tool")
+async def weather_tool(
+    location: str = "Seoul,KR",
+    lang: str = "kr",
+    units: str = "metric",
+    forecast_types: str = "current,hourly,daily",
+    include_extras: bool = True,
+    today_only: bool = False
+) -> Dict[str, Union[Dict, List, str]]:
+    """
+    OpenWeatherMap API를 사용해 지정된 지역의 날씨 정보를 조회하는 도구. 현재 시점부터 최대 5일(120시간) 이내의 데이터를 제공.
+
+    제공 데이터:
+        - current: 현재 시점의 날씨 (기온, 날씨 상태, 습도 등)
+        - hourly: 최대 5일간 3시간 간격의 시간별 예보 (당일 포함, 매 3시간 시점의 순간 날씨, 예: 12:00, 15:00)
+        - daily: 최대 5일간의 일별 요약 (당일 포함, 하루의 최대/최소 기온 등)
+
+    Args:
+        location (str): 도시명과 국가 코드 (예: "Seoul,KR"). 기본값: "Seoul,KR"
+        lang (str): 날씨 설명 언어 (예: "kr"은 한국어). 기본값: "kr"
+        units (str): 온도 단위 ("metric"은 °C, "imperial"은 °F). 기본값: "metric"
+        forecast_types (str): 조회할 데이터 유형 ("current", "hourly", "daily" 또는 쉼표로 구분된 조합). 기본값: "current,hourly,daily"
+        include_extras (bool): 체감 온도, 풍속, 강수량 등 추가 정보 포함 여부. 기본값: True
+        today_only (bool): 당일 데이터만 반환 (hourly와 daily에 적용). 기본값: False
+
+    Returns:
+        Dict[str, Union[Dict, List, str]]: 요청된 날씨 데이터. 오류 발생 시 오류 메시지 반환.
+            - current (Dict, optional): 현재 날씨
+                - temp (str): 기온 (예: "20°C")
+                - weather (str): 날씨 상태 (예: "맑음")
+                - humidity (int): 습도 (%)
+                - extras (Dict, optional): 체감 온도, 풍속, 기압, 강수량
+            - hourly (List[Dict], optional): 3시간 간격 예보 (최대 5일, 각 시점의 순간 날씨)
+                - time (str): 예보 시간 (예: "2025-05-01 15:00")
+                - temp (str): 기온
+                - weather (str): 날씨 상태
+                - extras (Dict, optional): 체감 온도, 풍속, 강수 확률
+            - daily (List[Dict], optional): 일별 예보 (최대 5일)
+                - date (str): 날짜 (예: "2025-05-01")
+                - temp_max (str): 최대 기온
+                - temp_min (str): 최소 기온
+                - weather (str): 주요 날씨 상태
+                - extras (Dict, optional): 강수 확률, 풍속
+
+    Raises:
+        aiohttp.ClientError: 네트워크 오류 발생 시
+    """
+    # API 키 확인
+    api_key = os.getenv("OPENWEATHERMAP_API_KEY")
+    if not api_key:
+        logger.error("OPENWEATHERMAP_API_KEY 환경 변수가 설정되지 않음")
+        return {"error": "OPENWEATHERMAP_API_KEY 환경 변수가 설정되지 않았습니다."}
+
+    # 데이터 유형 파싱
+    types = [t.strip() for t in forecast_types.split(",")]
+    if not all(t in ["current", "hourly", "daily"] for t in types):
+        logger.error(f"잘못된 forecast_types: {forecast_types}")
+        return {"error": f"잘못된 forecast_types: {forecast_types}. 'current', 'hourly', 'daily' 중 선택하세요."}
+
+    # 공통 파라미터
+    params = {
+        "q": location,
+        "appid": api_key,
+        "lang": lang,
+        "units": units
+    }
+
+    result = {}
+    try:
+        async with aiohttp.ClientSession() as session:
+            # 현재 날씨
+            if "current" in types:
+                current_url = "https://api.openweathermap.org/data/2.5/weather"
+                async with session.get(current_url, params=params) as response:
+                    if response.status != 200:
+                        error_msg = f"현재 날씨 API 호출 실패: {response.status} - {await response.text()}"
+                        logger.error(error_msg)
+                        return {"error": error_msg}
+                    current_data = await response.json()
+
+                current_temp = current_data["main"]["temp"]
+                current_formatted_temp = f"영하 {-current_temp}°C" if current_temp < 0 else f"{current_temp}°C"
+                result["current"] = {
+                    "temp": current_formatted_temp,
+                    "weather": current_data["weather"][0]["description"],
+                    "humidity": current_data["main"]["humidity"]
+                }
+                if include_extras:
+                    result["current"]["extras"] = {
+                        "feels_like": f"영하 {-current_data['main']['feels_like']}°C" if current_data["main"]["feels_like"] < 0 else f"{current_data['main']['feels_like']}°C",
+                        "wind_speed": f"{current_data['wind']['speed']} m/s",
+                        "pressure": f"{current_data['main']['pressure']} hPa",
+                        "precipitation": f"{current_data.get('rain', {}).get('1h', 0)} mm"
+                    }
+
+            # 시간별 및 일별 예보
+            if "hourly" in types or "daily" in types:
+                forecast_url = "https://api.openweathermap.org/data/2.5/forecast"
+                async with session.get(forecast_url, params=params) as response:
+                    if response.status != 200:
+                        error_msg = f"예보 API 호출 실패: {response.status} - {await response.text()}"
+                        logger.error(error_msg)
+                        return {"error": error_msg}
+                    forecast_data = await response.json()
+
+                # 시간별 예보 (3시간 간격)
+                if "hourly" in types:
+                    forecast_list = []
+                    today = datetime.now().strftime("%Y-%m-%d") if today_only else None
+                    for item in forecast_data["list"]:
+                        forecast_time = datetime.fromtimestamp(item["dt"]).strftime("%Y-%m-%d %H:00")
+                        if today_only and not forecast_time.startswith(today):
+                            continue
+                        forecast_temp = item["main"]["temp"]
+                        forecast_formatted_temp = f"영하 {-forecast_temp}°C" if forecast_temp < 0 else f"{forecast_temp}°C"
+                        forecast_item = {
+                            "time": forecast_time,
+                            "temp": forecast_formatted_temp,
+                            "weather": item["weather"][0]["description"]
+                        }
+                        if include_extras:
+                            forecast_item["extras"] = {
+                                "feels_like": f"영하 {-item['main']['feels_like']}°C" if item["main"]["feels_like"] < 0 else f"{item['main']['feels_like']}°C",
+                                "wind_speed": f"{item['wind']['speed']} m/s",
+                                "precipitation": f"{item.get('pop', 0) * 100}%",
+                                "pressure": f"{item['main']['pressure']} hPa"
+                            }
+                        forecast_list.append(forecast_item)
+                    result["hourly"] = forecast_list
+
+                # 일별 예보
+                if "daily" in types:
+                    daily_dict = {}
+                    today = datetime.now().strftime("%Y-%m-%d") if today_only else None
+                    for item in forecast_data["list"]:
+                        date = datetime.fromtimestamp(item["dt"]).strftime("%Y-%m-%d")
+                        if today_only and date != today:
+                            continue
+                        if date not in daily_dict:
+                            daily_dict[date] = {
+                                "temps": [],
+                                "weathers": [],
+                                "pops": [],
+                                "winds": []
+                            }
+                        daily_dict[date]["temps"].append(item["main"]["temp"])
+                        daily_dict[date]["weathers"].append(item["weather"][0]["description"])
+                        daily_dict[date]["pops"].append(item.get("pop", 0) * 100)
+                        daily_dict[date]["winds"].append(item["wind"]["speed"])
+
+                    daily_list = []
+                    for date, data in daily_dict.items():
+                        temp_max = max(data["temps"])
+                        temp_min = min(data["temps"])
+                        weather_counts = {}
+                        for w in data["weathers"]:
+                            weather_counts[w] = weather_counts.get(w, 0) + 1
+                        main_weather = max(weather_counts, key=weather_counts.get)
+                        daily_item = {
+                            "date": date,
+                            "temp_max": f"영하 {-temp_max}°C" if temp_max < 0 else f"{temp_max}°C",
+                            "temp_min": f"영하 {-temp_min}°C" if temp_min < 0 else f"{temp_min}°C",
+                            "weather": main_weather
+                        }
+                        if include_extras:
+                            daily_item["extras"] = {
+                                "precipitation": f"{sum(data['pops']) / len(data['pops'])}%",
+                                "wind_speed": f"{sum(data['winds']) / len(data['winds'])} m/s"
+                            }
+                        daily_list.append(daily_item)
+                    result["daily"] = daily_list
+
+        logger.info(f"{location} 날씨 데이터 조회 완료: {forecast_types}")
+        return result
+
+    except aiohttp.ClientError as e:
+        logger.error(f"API 호출 중 네트워크 오류: {str(e)}")
+        return {"error": f"네트워크 오류: {str(e)}"}
+    except Exception as e:
+        logger.error(f"예상치 못한 오류: {str(e)}")
+        return {"error": f"오류 발생: {str(e)}"}
 
 tools = [
     hybrid_news_search_tool,
@@ -1404,8 +1594,9 @@ tools = [
     get_daily_news_trend_tool,
     namuwiki_tool,
     stock_history_tool,
-    generate_dalle3_enhanced,
-    kr_stock_history_tool
+    dalle3_image_generation_tool,
+    kr_stock_history_tool,
+    weather_tool
 ]
 
 # 도구 분류
