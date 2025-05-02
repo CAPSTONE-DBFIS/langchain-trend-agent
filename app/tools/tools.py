@@ -26,6 +26,9 @@ from googleapiclient.discovery import build
 from docx import Document
 from docx.shared import Inches
 import matplotlib
+from unidecode import unidecode
+from matplotlib.gridspec import GridSpec
+
 matplotlib.use('Agg')  # 백엔드 설정
 import matplotlib.pyplot as plt
 from fake_useragent import UserAgent
@@ -43,10 +46,23 @@ from langchain_community.utilities import WikipediaAPIWrapper
 
 from app.utils.milvus_util import get_embedding_model, get_domestic_article_vector_store
 from app.utils.db_util import get_db_connection
-from app.utils.redis_util import get_redis_client
+from app.utils.redis_util import get_redis_client, clear_all_cache_db
+
+from pytrends.request import TrendReq
+
+import matplotlib.pyplot as plt
+
+from typing import Any, Dict, List
+import os
+import io
+import requests
+import pandas as pd
+import plotly.express as px
+import boto3
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
 
 def async_time_logger(name: str):
     def decorator(func):
@@ -158,10 +174,6 @@ async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = No
     """
     네이버 IT 카테고리 뉴스 통합 검색 도구 (Elasticsearch + Milvus)
 
-    When to use
-        • 국내 IT 뉴스에서 키워드 매칭 정확도와 의미 유사도(질문식)를 동시 활용하고 싶을 때
-        • 1년 이내 기사만, 또는 임의 기간 필터가 필요할 때
-
     Args
         query (str): 의미 기반 검색용 질문 문장
         keyword (str): Elasticsearch 키워드 (단어·구문)
@@ -172,9 +184,7 @@ async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = No
         list[dict]: 중복 제거 후 스코어 내림차순 정렬된 기사 목록
             title, date, media_company, url, content, score, source 필드 포함
 
-
     Notes
-        • Elasticsearch 결과가 우선 정렬된다(source='Elasticsearch' ⇒ 0).
         • 기사 크롤링 주기는 하루 1 회(00:00). 따라서 “오늘자” 기사는 포함되지 않는다.
     """
     try:
@@ -235,17 +245,12 @@ async def hybrid_news_search_tool(query: str, keyword: str, date_start: str = No
     except Exception as e:
         return [{"error": f"하이브리드 뉴스 검색 실패: {str(e)}"}]
 
-from urllib.parse import quote
-import re
 
 @tool
 @async_time_logger("gnews_search_tool")
 async def gnews_search_tool(query: str, lang: str = "en", country: str = "us", max_results: int = 10) -> List[Dict[str, str]]:
     """
-    GNews API 해외 헤드라인 검색 도구
-
-    When to use
-        • 영문·다국어 키워드로 영문·다국어 일반 뉴스를 열람할 때
+    GNews API 해외 뉴스 검색 도구
 
     Args:
         query (str): 검색 키워드 (예: 'cloud', 'AI', "cloud trends")
@@ -259,7 +264,6 @@ async def gnews_search_tool(query: str, lang: str = "en", country: str = "us", m
     Notes:
         • GNews는 다중 단어 입력 시 정확한 구문 검색을 위해 큰따옴표("...")를 사용해야 하며, 공백은 AND로 동작합니다.
         • 특수문자 포함 또는 문장형 쿼리는 자동으로 escape 처리됩니다.
-        • 한국어 키워드는 정확도가 낮아 hybrid_news_search_tool 사용을 권장합니다.
     """
     try:
         # API 키 확인
@@ -312,11 +316,7 @@ async def gnews_search_tool(query: str, lang: str = "en", country: str = "us", m
 @async_time_logger("newsapi_search_tool")
 async def newsapi_search_tool(query: str, lang: str = "en", max_results: int = 10) -> List[Dict[str, str]]:
     """
-    NewsAPI 해외 종합 뉴스 검색 도구
-
-    When to use
-        • 폭넓은 언어·매체에서 키워드 기반 최신 뉴스를 수집할 때
-        • 정렬 옵션(publishedAt)과 페이지 사이즈 제어가 필요할 때
+    NewsAPI 해외 뉴스 검색 도구
 
     Args
         query (str): 검색 키워드(영문 권장)
@@ -768,10 +768,6 @@ async def google_trending_tool(query: str, start_date: str = None, end_date: str
     """
     Google Trends 키워드 관심도 시계열 조회 도구
 
-    When to use
-        • 검색량 변화를 데이터 포인트로 시각화·보고서 작성 시
-        • 특정 기간(최대 최근 5년)을 지정해 국내(KR) 트렌드만 비교할 때
-
     Args
         query (str): 검색 키워드
         start_date (str, optional): YYYY-MM-DD, 기본 최근 한 달
@@ -784,8 +780,6 @@ async def google_trending_tool(query: str, start_date: str = None, end_date: str
         • pytrends API는 호출 과다 시 429 응답 반환.
     """
     try:
-        from pytrends.request import TrendReq
-
         pytrends = TrendReq(hl="ko", tz=540)
 
         # 날짜 범위 설정
@@ -822,10 +816,6 @@ async def google_trending_tool(query: str, start_date: str = None, end_date: str
 async def generate_trend_report_tool(search_date: str = None) -> str:
     """
     네이버 IT 뉴스 기반 일일 트렌드 보고서 생성 도구
-
-    When to use
-        • 지정일(최신 n-1일) 기준 키워드 빈도와 RAG 기사 내용을 종합 분석해야 할 때
-        • Word (docx) 형식의 그래프 포함 보고서를 S3 URL로 받아야 할 때
 
     Args
         search_date (str, optional): YYYY-MM-DD, 기본 어제
@@ -1033,40 +1023,310 @@ def upload_report_to_spring(file_path: str):
         else:
             raise Exception(f"Spring 업로드 실패: {response.status_code} {response.text}")
 
+
+def slugify(text: str) -> str:
+    """한글 키워드를 ASCII 안전 문자열로 변환합니다."""
+    ascii_text = unidecode(text)        # '유심' -> 'usim'
+    ascii_text = ascii_text.lower()
+    # 영숫자와 하이픈만 허용, 나머지는 언더바로 대체
+    ascii_text = ''.join(c if c.isalnum() or c == '-' else '_' for c in ascii_text)
+    return ascii_text.strip('_')
+
 @tool
-@async_time_logger("get_daily_news_trend_tool")
-async def get_daily_news_trend_tool(date: str) -> str:
+@async_time_logger("daily_news_trend_tool")
+async def daily_news_trend_tool(
+    *,
+    search_date: str,
+) -> Dict[str, Any]:
     """
-    Spring API 일간 트렌드 키워드·뉴스 데이터 조회 도구
+    일간 트렌드 조회, 차트 생성 도구
 
-    When to use
-        • 특정 날짜 네이버 IT 뉴스 상위 키워드와 연관 기사를 구조화 데이터로 가져올 때
-
-    Args
-        date (str): YYYY-MM-DD
-    Returns
-        str: JSON 문자열 (Spring API 원본) 또는 오류 메시지
-
-    Notes
-        • 오늘 날짜 데이터는 제공되지 않는다.
-        • Redis 캐시가 있으면 즉시 반환하여 Spring API 호출 수를 절약한다.
+    크롤링은 자정에 수행되므로 가장 최근 사용 가능한 데이터는 어제 날짜입니다.
+    search_date(YYYY-MM-DD)로 API 호출
     """
-    # redis 캐시 조회
+    # 0) Redis 캐시
     r = get_redis_client()
-    cache_key = f"daily_trend:{date}"
-    cached = r.get(cache_key)
-    if cached:
-        return cached
+    cache_key = f"daily_trend_with_charts:{search_date}"
+    if (cached := r.get(cache_key)):
+        return json.loads(cached)
 
+    # 1) 데이터 조회
+    resp = requests.get(f"http://localhost:8080/api/insight?date={search_date}")
+    resp.raise_for_status()
+    data = resp.json()
+    top = data.get("top_keywords", [])
+    if not top:
+        return {"date": search_date, "top_keywords": []}
+
+    # 2) Elasticsearch 클라이언트 설정
     try:
-        url = f"http://localhost:8080/api/insight?date={date}"
-        response = requests.get(url)
-        response.raise_for_status()
-        # redis 캐시 저장
-        r.set(cache_key, response.text)
-        return response.text
-    except Exception as e:
-        return f"트렌드 리포트 데이터 조회 실패: {e}"
+        es = Elasticsearch(
+            hosts=[f"http://{os.getenv('ELASTICSEARCH_HOST')}:{os.getenv('ELASTICSEARCH_PORT')}"],
+            basic_auth=(os.getenv("ELASTICSEARCH_USERNAME"), os.getenv("ELASTICSEARCH_PASSWORD")),
+            verify_certs=False
+        )
+    except Exception:
+        es = None
+
+    # 3) 키워드별 ES 기사 검색 (비동기)
+    async def fetch_articles(keyword: str) -> List[Dict[str, Any]]:
+        if es is None:
+            return []
+
+        def sync_search():
+            res = es.search(
+                index=os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME"),
+                body={
+                    "query": {
+                        "bool": {
+                            "must": [
+                                {"match": {"content": keyword}},
+                                {"range": {"date": {"gte": search_date, "lte": search_date}}}
+                            ]
+                        }
+                    },
+                    "size": 5,
+                    "sort": [{"date": {"order": "desc"}}]
+                }
+            )
+            return [
+                {
+                    "title": hit["_source"].get("title"),
+                    "date": hit["_source"].get("date"),
+                    "media_company": hit["_source"].get("media_company"),
+                    "url": hit["_source"].get("url"),
+                    "content": hit["_source"].get("content", "")[:200] + "..."
+                }
+                for hit in res["hits"]["hits"]
+            ]
+
+        return await asyncio.to_thread(sync_search)
+
+    # 4) S3 클라이언트
+    s3 = boto3.client(
+        "s3",
+        aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+        region_name=os.environ.get("AWS_REGION", "ap-northeast-2"),
+    )
+    bucket = os.environ.get("S3_BUCKET", "trend-charts")
+
+    enriched = []
+
+    # 5) 메인 차트
+    df_main = pd.DataFrame({
+        "keyword": [kw["keyword"] for kw in top],
+        "frequency": [kw["frequency"] for kw in top],
+    })
+    fig_main = px.bar(
+        df_main, x="frequency", y="keyword", orientation="h",
+        title=f"{search_date} 일간 메인 키워드", height=400
+    )
+    fig_main.update_layout(
+        margin=dict(l=120, r=20, t=50, b=20),
+        yaxis=dict(categoryorder="total ascending")
+    )
+    buf = io.BytesIO()
+    buf.write(fig_main.to_image(format="png"))
+    buf.seek(0)
+    key_main = f"daily/{search_date}/main-bar.png"
+    s3.put_object(Body=buf, Bucket=bucket, Key=key_main, ContentType="image/png")
+    enriched.append({
+        "type": "main",
+        "chart": f"https://{bucket}.s3.amazonaws.com/{key_main}",
+        "description": "네이버 뉴스 IT 카테고리 일간 키워드 TOP 10 빈도수 막대 그래프"
+    })
+
+    # 6) 각 키워드별 도넛 차트 + ES 기사 조회
+    article_tasks = {
+        kw["keyword"]: asyncio.create_task(fetch_articles(kw["keyword"]))
+        for kw in top
+    }
+
+    for kw in top:
+        rels = kw.get("relatedKeywords", [])[:10]
+        df_pie = pd.DataFrame([
+            {"related": r["relatedKeyword"], "freq": r["frequency"]}
+            for r in rels if r["frequency"] > 0
+        ])
+        chart_url = None
+        if not df_pie.empty:
+            fig_pie = px.pie(
+                df_pie, names="related", values="freq", hole=0.4,
+                title=f"{kw['keyword']} 연관 키워드 TOP{len(df_pie)}", height=350
+            )
+            fig_pie.update_traces(textposition="inside", textinfo="percent+label")
+            fig_pie.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+            buf = io.BytesIO()
+            buf.write(fig_pie.to_image(format="png"))
+            buf.seek(0)
+            key_pie = f"daily/{search_date}/pie_{kw['id']}.png"
+            s3.put_object(Body=buf, Bucket=bucket, Key=key_pie, ContentType="image/png")
+            chart_url = f"https://{bucket}.s3.amazonaws.com/{key_pie}"
+
+        # ES 기사 결과 await
+        articles = await article_tasks[kw["keyword"]]
+
+        enriched.append({
+            "keyword": kw["keyword"],
+            "frequency": kw["frequency"],
+            "relatedKeywords": rels,
+            "chart": chart_url,
+            "articles": articles
+        })
+
+    result = {"date": search_date, "top_keywords": enriched}
+
+    # 7) Redis 캐싱 (무기한)
+    r.set(cache_key, json.dumps(result, ensure_ascii=False))
+    return result
+
+@tool
+@async_time_logger("weekly_news_trend_tool")
+async def weekly_news_trend_tool(
+    *,
+    date: str,
+) -> Dict[str, Any]:
+    """
+    주간 트렌드 조회, 차트 생성 도구
+
+    크롤링은 자정에 수행되므로 가장 최근 사용 가능한 데이터는 어제 날짜입니다.
+    date(YYYY-MM-DD) 기준 최근 7일 네이버 IT 뉴스 상위 키워드 조회
+    """
+    # 0) Redis 캐시
+    r = get_redis_client()
+    cache_key = f"weekly_trend_with_charts:{date}"
+    if (cached := r.get(cache_key)):
+        return json.loads(cached)
+
+    # 1) 주간 데이터 조회
+    resp = requests.get(f"http://localhost:8080/api/insight/weekly?date={date}")
+    resp.raise_for_status()
+    weekly = resp.json().get("top_weekly_keywords", [])
+    if not weekly:
+        return {"date": date, "top_keywords": []}
+
+    # 2) Elasticsearch 클라이언트 설정
+    try:
+        es = Elasticsearch(
+            hosts=[f"http://{os.getenv('ELASTICSEARCH_HOST')}:{os.getenv('ELASTICSEARCH_PORT')}"],
+            basic_auth=(os.getenv("ELASTICSEARCH_USERNAME"), os.getenv("ELASTICSEARCH_PASSWORD")),
+            verify_certs=False
+        )
+    except Exception:
+        es = None
+
+    # 3) 키워드별 ES 기사 검색 (비동기)
+    async def fetch_articles(keyword: str) -> List[Dict[str, Any]]:
+        if es is None:
+            return []
+
+        start_date = (datetime.fromisoformat(date) - timedelta(days=6)).strftime("%Y-%m-%d")
+        end_date = date  # 주어진 date
+
+        def sync_search():
+            res = es.search(
+                index=os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME"),
+                body={
+                    "query": {
+                        "bool": {
+                            "must": [
+                                {"match": {"content": keyword}},
+                                {"range": {"date": {"gte": start_date, "lte": end_date}}}
+                            ]
+                        }
+                    },
+                    "size": 5,
+                    "sort": [{"date": {"order": "desc"}}]
+                }
+            )
+            return [
+                {
+                    "title": hit["_source"].get("title"),
+                    "date": hit["_source"].get("date"),
+                    "media_company": hit["_source"].get("media_company"),
+                    "url": hit["_source"].get("url"),
+                    "content": hit["_source"].get("content", "")[:200] + "..."
+                }
+                for hit in res["hits"]["hits"]
+            ]
+
+        return await asyncio.to_thread(sync_search)
+
+    # 4) S3 클라이언트
+    s3 = boto3.client(
+        "s3",
+        aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+        region_name=os.environ.get("AWS_REGION", "ap-northeast-2"),
+    )
+    bucket = os.environ.get("S3_BUCKET", "trend-charts")
+
+    enriched: List[Dict[str, Any]] = []
+
+    # 5) 메인 차트
+    df_main = pd.DataFrame({
+        "keyword": [kw["keyword"] for kw in weekly],
+        "frequency": [kw["totalFrequency"] for kw in weekly],
+    })
+    fig_main = px.bar(
+        df_main, x="frequency", y="keyword", orientation="h",
+        title=f"{date} 주간 메인 키워드 총빈도", height=400
+    )
+    fig_main.update_layout(
+        margin=dict(l=120, r=20, t=50, b=20),
+        yaxis=dict(categoryorder="total ascending")
+    )
+    buf = io.BytesIO()
+    buf.write(fig_main.to_image(format="png"))
+    buf.seek(0)
+    key_main = f"weekly/{date}/main-bar.png"
+    s3.put_object(Body=buf, Bucket=bucket, Key=key_main, ContentType="image/png")
+    enriched.append({
+        "type": "main",
+        "description": "주간 메인 키워드 총빈도 차트",
+        "chart": f"https://{bucket}.s3.amazonaws.com/{key_main}"
+    })
+
+    # 6) 키워드별 도넛 차트 + ES 기사 조회
+    article_tasks = {
+        kw["keyword"]: asyncio.create_task(fetch_articles(kw["keyword"]))
+        for kw in weekly
+    }
+
+    for kw in weekly:
+        rels = kw.get("relatedKeywords", [])[:10]
+        df_pie = pd.DataFrame([{"related": r["relatedKeyword"], "freq": r["frequency"]} for r in rels])
+        chart_url = None
+        if not df_pie.empty:
+            fig_pie = px.pie(
+                df_pie, names="related", values="freq", hole=0.4,
+                title=f"{kw['keyword']} 연관 키워드 TOP{len(df_pie)}", height=350
+            )
+            fig_pie.update_traces(textposition="inside", textinfo="percent+label")
+            fig_pie.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+            buf = io.BytesIO()
+            buf.write(fig_pie.to_image(format="png"))
+            buf.seek(0)
+            key_pie = f"weekly/{date}/pie_{kw['keywordId']}.png"
+            s3.put_object(Body=buf, Bucket=bucket, Key=key_pie, ContentType="image/png")
+            chart_url = f"https://{bucket}.s3.amazonaws.com/{key_pie}"
+
+        articles = await article_tasks[kw["keyword"]]
+
+        enriched.append({
+            "keyword":        kw["keyword"],
+            "totalFrequency": kw["totalFrequency"],
+            "relatedKeywords": rels,
+            "chart":          chart_url,
+            "articles":       articles
+        })
+
+    result = {"date": date, "top_keywords": enriched}
+
+    # 7) Redis 캐싱 (무기한)
+    r.set(cache_key, json.dumps(result, ensure_ascii=False))
+    return result
 
 
 @tool
@@ -1082,10 +1342,6 @@ async def stock_history_tool(
 ) -> Dict[str, Any]:
     """
     미국·글로벌 주식 OHLCV 조회 도구 (yfinance)
-
-    When to use
-        • 미국 상장사 혹은 해외 ETF 가격 히스토리가 필요할 때
-        • 배당 조정·분할 보정(auto_adjust) 옵션을 사용하고 싶을 때
 
     Args
         symbol (str): 티커 심볼
@@ -1184,11 +1440,7 @@ async def kr_stock_history_tool(
     end: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    한국 주식 OHLCV 조회 도구 (FinanceDataReader)
-
-    When to use
-        • KRX/코스닥 종목 일간 가격 데이터를 받아야 할 때
-        • 해외 API 대신 국내 공개 데이터 소스를 활용하고 싶을 때
+    한국, 해외 주식 OHLCV 조회 도구 (FinanceDataReader)
 
     Args
         symbol (str): 6자리 숫자 티커(예: '005930')
@@ -1280,9 +1532,6 @@ async def namuwiki_tool(keyword: str) -> str:
     """
     나무위키 본문 크롤링·요약 도구
 
-    When to use
-        • 대중문화·밈·비공식 정보 등 Wikipedia에 없는 주제를 다룰 때
-
     Args
         keyword (str): 검색 키워드
     Returns
@@ -1345,9 +1594,6 @@ async def namuwiki_tool(keyword: str) -> str:
 async def dalle3_image_generation_tool(prompt: str) -> str:
     """
     DALL·E 3 이미지 생성용 프롬프트 보조 + 이미지 생성 도구
-
-    When to use
-        • 사용자 러프 프롬프트를 영어 시각 묘사 중심으로 보강한 뒤 이미지를 생성할 때
 
     Args
         prompt (str): 원본 프롬프트(자연어)
@@ -1421,28 +1667,6 @@ async def weather_tool(
         forecast_types (str): 조회할 데이터 유형 ("current", "hourly", "daily" 또는 쉼표로 구분된 조합). 기본값: "current,hourly,daily"
         include_extras (bool): 체감 온도, 풍속, 강수량 등 추가 정보 포함 여부. 기본값: True
         today_only (bool): 당일 데이터만 반환 (hourly와 daily에 적용). 기본값: False
-
-    Returns:
-        Dict[str, Union[Dict, List, str]]: 요청된 날씨 데이터. 오류 발생 시 오류 메시지 반환.
-            - current (Dict, optional): 현재 날씨
-                - temp (str): 기온 (예: "20°C")
-                - weather (str): 날씨 상태 (예: "맑음")
-                - humidity (int): 습도 (%)
-                - extras (Dict, optional): 체감 온도, 풍속, 기압, 강수량
-            - hourly (List[Dict], optional): 3시간 간격 예보 (최대 5일, 각 시점의 순간 날씨)
-                - time (str): 예보 시간 (예: "2025-05-01 15:00")
-                - temp (str): 기온
-                - weather (str): 날씨 상태
-                - extras (Dict, optional): 체감 온도, 풍속, 강수 확률
-            - daily (List[Dict], optional): 일별 예보 (최대 5일)
-                - date (str): 날짜 (예: "2025-05-01")
-                - temp_max (str): 최대 기온
-                - temp_min (str): 최소 기온
-                - weather (str): 주요 날씨 상태
-                - extras (Dict, optional): 강수 확률, 풍속
-
-    Raises:
-        aiohttp.ClientError: 네트워크 오류 발생 시
     """
     # API 키 확인
     api_key = os.getenv("OPENWEATHERMAP_API_KEY")
@@ -1591,7 +1815,8 @@ tools = [
     wikipedia_tool,
     google_trending_tool,
     generate_trend_report_tool,
-    get_daily_news_trend_tool,
+    daily_news_trend_tool,
+    weekly_news_trend_tool,
     namuwiki_tool,
     stock_history_tool,
     dalle3_image_generation_tool,
@@ -1602,7 +1827,7 @@ tools = [
 # 도구 분류
 news_tools = [
     hybrid_news_search_tool,
-    get_daily_news_trend_tool,
+    daily_news_trend_tool,
     search_web_tool,
     wikipedia_tool,
     google_trending_tool,
