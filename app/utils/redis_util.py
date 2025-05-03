@@ -4,12 +4,6 @@ import redis
 
 load_dotenv()
 
-import os
-import redis
-from dotenv import load_dotenv
-
-load_dotenv()
-
 def get_redis_client():
     """Redis 클라이언트 연결."""
     required_vars = ["REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD"]
@@ -40,3 +34,5 @@ def clear_all_cache_db():
     r = get_redis_client()
     r.flushdb()
     print("현재 Redis DB의 모든 키를 삭제했습니다.")
+
+# clear_all_cache_db()
