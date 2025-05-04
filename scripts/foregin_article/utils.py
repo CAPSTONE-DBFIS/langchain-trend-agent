@@ -9,7 +9,10 @@ def format_date(date_str, input_format=None, output_format="%Y-%m-%d"):
     날짜 문자열을 지정된 output_format으로 변환합니다.
     input_format이 제공되면 datetime.strptime를 사용하고, 그렇지 않으면 dateutil.parser를 사용합니다.
     """
-    from dateutil import parser
+    # 날짜가 None이거나 빈 문자열인 경우 현재 날짜 반환
+    if not date_str:
+        return datetime.now().strftime(output_format)
+
     try:
         if input_format:
             dt = datetime.strptime(date_str, input_format)
@@ -18,7 +21,8 @@ def format_date(date_str, input_format=None, output_format="%Y-%m-%d"):
         return dt.strftime(output_format)
     except Exception as e:
         print(f"날짜 파싱 오류: {e}")
-        return date_str
+        # 파싱 실패 시 현재 날짜 반환
+        return datetime.now().strftime(output_format)
 
 
 def sanitize_for_csv(text):
@@ -29,18 +33,18 @@ def sanitize_for_csv(text):
     """
     if not text or not isinstance(text, str):
         return ""
-    
+
     # 줄바꿈 문자를 공백으로 대체
     text = text.replace('\n', ' ').replace('\r', ' ')
-    
+
     # 연속된 공백을 하나로 줄임
     text = ' '.join(text.split())
-    
+
     # 내용이 너무 길 경우 잘라내기 (선택 사항)
     max_length = 5000
     if len(text) > max_length:
         text = text[:max_length] + "..."
-    
+
     return text
 
 
@@ -75,16 +79,16 @@ def save_to_csv(articles, filepath):
     # 날짜가 datetime 객체인 경우 문자열로 변환
     if not df.empty and 'date' in df.columns and isinstance(df.loc[0, 'date'], datetime):
         df['date'] = df['date'].apply(lambda d: d.strftime("%Y-%m-%d"))
-    
+
     # 컬럼 순서 조정
     columns_order = ['category', 'content', 'date', 'image_url', 'media_company', 'title', 'url']
-    
+
     # 존재하는 컬럼만 사용
     available_columns = [col for col in columns_order if col in df.columns]
-    
+
     # 순서대로 정렬하여 저장
     df = df[available_columns]
-    
+
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     df.to_csv(filepath, index=False, encoding='utf-8-sig', quotechar='"', escapechar='\\', lineterminator='\n')
     print(f"CSV 파일이 저장되었습니다: {filepath}, 기사 수: {len(df)}")
