@@ -99,7 +99,13 @@ class ForeignKeywordAnalyzer:
         # 키워드 소문자 변환
         search_word = keyword.lower()
         
-        # Elasticsearch 쿼리 구성
+        # 날짜 형식 확인 및 변환 (문자열이 아니면 문자열로 변환)
+        if isinstance(date, datetime):
+            date = date.strftime('%Y-%m-%d')
+        
+        print(f"검색 키워드: '{search_word}', 날짜: {date}")
+        
+        # Elasticsearch 쿼리 구성 - match 쿼리 사용
         query = {
             "query": {
                 "bool": {
@@ -107,8 +113,8 @@ class ForeignKeywordAnalyzer:
                         {
                             "bool": {
                                 "should": [
-                                    {"wildcard": {"title": f"*{search_word}*"}},
-                                    {"wildcard": {"content": f"*{search_word}*"}}
+                                    {"match": {"title": search_word}},
+                                    {"match": {"content": search_word}}
                                 ],
                                 "minimum_should_match": 1
                             }
@@ -131,7 +137,56 @@ class ForeignKeywordAnalyzer:
             )
             
             hits = response['hits']['hits']
-            print(f"'{keyword}' 키워드 관련 기사 {len(hits)}개 검색 완료")
+            total_hits = response['hits']['total']['value'] if 'total' in response['hits'] else len(hits)
+            print(f"'{keyword}' 키워드 관련 기사 {total_hits}개 검색 완료")
+            
+            # 검색 결과가 없을 경우 match_phrase와 함께 retry
+            if total_hits == 0:
+                print(f"정확한 매치가 없어 부분 매치로 재시도합니다.")
+                query["query"]["bool"]["must"][0]["bool"]["should"] = [
+                    {"match_phrase_prefix": {"title": search_word}},
+                    {"match_phrase_prefix": {"content": search_word}}
+                ]
+                
+                response = self.es.search(
+                    index="foreign_news_article",
+                    body=query
+                )
+                
+                hits = response['hits']['hits']
+                total_hits = response['hits']['total']['value'] if 'total' in response['hits'] else len(hits)
+                print(f"부분 매치 결과: '{keyword}' 키워드 관련 기사 {total_hits}개 검색 완료")
+            
+            # 여전히 결과가 없으면 원래 키워드 추출에 사용된 방식으로 검색
+            if total_hits == 0:
+                print(f"부분 매치도 실패. 토큰 기반 검색으로 재시도합니다.")
+                # 제목에서만 검색 (원래 키워드 추출 방식과 동일)
+                query = {
+                    "query": {
+                        "bool": {
+                            "must": [
+                                {"term": {"date": date}},
+                                {
+                                    "multi_match": {
+                                        "query": search_word,
+                                        "fields": ["title", "content"],
+                                        "type": "best_fields"
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "size": 1000
+                }
+                
+                response = self.es.search(
+                    index="foreign_news_article",
+                    body=query
+                )
+                
+                hits = response['hits']['hits']
+                total_hits = response['hits']['total']['value'] if 'total' in response['hits'] else len(hits)
+                print(f"토큰 기반 검색 결과: '{keyword}' 키워드 관련 기사 {total_hits}개 검색 완료")
             
             # 연관 키워드 카운터 초기화
             related_keywords_counter = Counter()
@@ -191,12 +246,28 @@ class ForeignKeywordAnalyzer:
                     continue
                     
                 for rank, (related_word, count) in enumerate(related_keywords[word], start=1):
+                    # 기존 항목 확인
                     cur.execute("""
-                        INSERT INTO foreign_keyword_analysis (keyword_id, keyword, related_keyword, frequency, rank, date)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (keyword_id, related_keyword, date) DO UPDATE
-                        SET frequency = EXCLUDED.frequency, rank = EXCLUDED.rank;
-                    """, (keyword_id, word, related_word, count, rank, date))
+                        SELECT id FROM foreign_keyword_analysis 
+                        WHERE keyword_id = %s AND related_keyword = %s AND date = %s
+                    """, (keyword_id, related_word, date))
+                    
+                    result = cur.fetchone()
+                    
+                    if result:
+                        # 기존 항목 업데이트
+                        cur.execute("""
+                            UPDATE foreign_keyword_analysis 
+                            SET frequency = %s, rank = %s
+                            WHERE id = %s
+                        """, (count, rank, result[0]))
+                    else:
+                        # 새 항목 삽입
+                        cur.execute("""
+                            INSERT INTO foreign_keyword_analysis 
+                            (keyword_id, keyword, related_keyword, frequency, rank, date)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (keyword_id, word, related_word, count, rank, date))
             
             conn.commit()
             cur.close()
