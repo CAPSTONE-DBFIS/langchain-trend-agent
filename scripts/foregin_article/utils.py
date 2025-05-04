@@ -9,7 +9,10 @@ def format_date(date_str, input_format=None, output_format="%Y-%m-%d"):
     날짜 문자열을 지정된 output_format으로 변환합니다.
     input_format이 제공되면 datetime.strptime를 사용하고, 그렇지 않으면 dateutil.parser를 사용합니다.
     """
-    from dateutil import parser
+    # 날짜가 None이거나 빈 문자열인 경우 현재 날짜 반환
+    if not date_str:
+        return datetime.now().strftime(output_format)
+        
     try:
         if input_format:
             dt = datetime.strptime(date_str, input_format)
@@ -18,7 +21,8 @@ def format_date(date_str, input_format=None, output_format="%Y-%m-%d"):
         return dt.strftime(output_format)
     except Exception as e:
         print(f"날짜 파싱 오류: {e}")
-        return date_str
+        # 파싱 실패 시 현재 날짜 반환
+        return datetime.now().strftime(output_format)
 
 
 def sanitize_for_csv(text):

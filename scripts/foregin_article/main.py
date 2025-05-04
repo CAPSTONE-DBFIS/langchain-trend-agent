@@ -11,6 +11,7 @@ from scraper_nyt import nyt_start
 from scraper_techcrunch import techcrunch_start
 from scraper_ars_technica import ars_technica_start
 from scraper_zdnet import zdnet_start
+from scripts.foregin_article.the_verge.main_verge import the_verge_start
 from foreign_keyword_extractor import ForeignKeywordExtractor
 from foreign_keyword_analyzer import ForeignKeywordAnalyzer
 
@@ -119,16 +120,28 @@ def save_to_elasticsearch(articles):
         try:
             # URL이 이미 있는지 확인 (중복 기사)
             if article["url"] in existing_urls:
+                logger.debug(f"URL 중복으로 건너뜀: {article['url']}")
                 skipped_count += 1
                 continue
             
-            # 필수 필드 확인 (제목, 본문, 이미지가 모두 있어야 함)
-            if (not article.get("title") or 
-                not article.get("content") or 
-                not article.get("image_url") or
-                article.get("title") == "제목 없음" or
-                article.get("content") == "본문 없음"):
-                logger.warning(f"[예외] 필수 정보 누락으로 기사 제외: {article.get('title', '제목 없음')}")
+            # 필수 필드 확인 (제목, 본문)
+            if not article.get("title"):
+                logger.warning(f"제목 누락으로 기사 제외: {article.get('url', '알 수 없는 URL')}")
+                skipped_count += 1
+                continue
+            
+            if not article.get("content"):
+                logger.warning(f"본문 누락으로 기사 제외: {article.get('title', '제목 없음')}, URL: {article.get('url', '알 수 없는 URL')}")
+                skipped_count += 1
+                continue
+            
+            if article.get("title") == "제목 없음":
+                logger.warning(f"유효하지 않은 제목으로 기사 제외: {article.get('url', '알 수 없는 URL')}")
+                skipped_count += 1
+                continue
+            
+            if article.get("content") == "본문 없음":
+                logger.warning(f"유효하지 않은 본문으로 기사 제외: {article.get('title', '제목 없음')}, URL: {article.get('url', '알 수 없는 URL')}")
                 skipped_count += 1
                 continue
             
@@ -194,18 +207,24 @@ def main():
         zdnet_articles = zdnet_start(3)
         all_articles.extend(zdnet_articles)
         logger.info(f"ZDNET 스크래핑 완료: {len(zdnet_articles)}개 기사")
+
+        # 5. THE VERGE 기사 스크래핑
+        logger.info("----- THE VERGE 스크래핑 시작 -----")
+        the_verge_articles = the_verge_start(page_count=3)
+        all_articles.extend(the_verge_articles)
+        logger.info(f"THE VERGE 스크래핑 완료: {len(the_verge_articles)}개 기사")
         
-        # 5. 전체 스크래핑 결과 요약
+        # 6. 전체 스크래핑 결과 요약
         logger.info(f"총 {len(all_articles)}개 기사 스크래핑 완료")
         
-        # 6. Elasticsearch에 저장
+        # 7. Elasticsearch에 저장
         logger.info("----- Elasticsearch 저장 시작 -----")
         saved_count = save_to_elasticsearch(all_articles)
         
         # 오늘 날짜 가져오기
         today = datetime.now().strftime("%Y-%m-%d")
         
-        # 7. 키워드 빈도수 추출
+        # 8. 키워드 빈도수 추출
         logger.info("----- 키워드 빈도수 추출 시작 -----")
         try:
             keyword_extractor = ForeignKeywordExtractor()
@@ -215,7 +234,7 @@ def main():
             logger.error(f"[예외] 키워드 빈도수 추출 오류: {str(e)}")
             success = False
         
-        # 8. 연관 키워드 분석
+        # 9. 연관 키워드 분석
         logger.info("----- 연관 키워드 분석 시작 -----")
         try:
             keyword_analyzer = ForeignKeywordAnalyzer()
