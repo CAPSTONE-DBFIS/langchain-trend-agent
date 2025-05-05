@@ -71,7 +71,7 @@ KST = timezone(timedelta(hours=9))
 
 @tool
 @async_time_logger("es_news_search_tool")
-async def es_news_search_tool(
+async def domestic_it_news_search_tool(
     keyword: str,
     date_start: str | None = None,
     date_end: str | None = None
@@ -126,15 +126,15 @@ async def es_news_search_tool(
                                 "lte": f"{date_end}T23:59:59"
                             }
                         }
+                    },
+                    {
+                        "match": {
+                            "title": {
+                                "query": keyword
+                            }
+                        }
                     }
-                ],
-                "should": [
-                    # 제목에 키워드 포함 (가중치 높음)
-                    {"match": {"title": {"query": keyword, "boost": 3}}},
-                    # 본문에 키워드 포함 (가중치 낮음)
-                    {"match": {"content": {"query": keyword, "boost": 1}}}
-                ],
-                "minimum_should_match": 1
+                ]
             }
         },
         "sort": [
@@ -174,7 +174,7 @@ async def es_news_search_tool(
 
 @tool
 @async_time_logger("gnews_search_tool")
-async def gnews_search_tool(en_keyword: str, lang: str = "en", country: str = "us", max_results: int = 10) -> List[Dict[str, str]]:
+async def foreign_news_search_tool(en_keyword: str, lang: str = "en", country: str = "us", max_results: int = 10) -> List[Dict[str, str]]:
     """
     GNews API를 이용해 해외 뉴스를 검색합니다.
 
@@ -902,7 +902,7 @@ async def news_trend_chart_tool(
     date: str
 ) -> Dict[str, Any]:
     """
-    일간 또는 주간 트렌드를 조회하고 차트를 생성합니다.
+    특정 날짜의 일간, 주간 트렌드를 조회하고 차트를 생성합니다.
 
     When to use:
         - 어제의 트렌드, 일주일의 트렌드를 조회할 때.
@@ -1039,9 +1039,8 @@ async def news_trend_chart_tool(
 @async_time_logger("stock_history_tool")
 async def stock_history_tool(
     symbol: str,
-    period: Optional[str] = None,
-    start: Optional[str] = None,
-    end: Optional[str] = None,
+    start: str,
+    end: str,
     auto_adjust: bool = True,
     back_adjust: bool = False,
 ) -> Dict[str, Any]:
@@ -1054,14 +1053,12 @@ async def stock_history_tool(
 
     Args:
         symbol (str): 티커 심볼.
-        period (str, optional): 조회 기간 ('1d', '5d', '7d', '14d', '1mo'만 사용 가능. '1w', '2w' 등은 사용 금지).
-                                start/end를 지정하지 않는 경우에만 사용.
-        start (str, optional): 조회 시작일 (YYYY-MM-DD). period와 **함께 사용할 수 없음**.
-        end (str, optional): 조회 종료일 (YYYY-MM-DD). period와 **함께 사용할 수 없음**.
+        start (str): 조회 시작일 (YYYY-MM-DD).
+        end (str): 조회 종료일 (YYYY-MM-DD).
 
     Notes:
-        - **period 또는 start/end 중 하나만 선택**해야 합니다. 둘 다 지정하면 period가 우선 적용됩니다.
-        - start와 end로 조회 시, 최대 조회 가능 기간은 31일입니다.
+        - **start와 end 날짜를 반드시 지정**해야 합니다.
+        - 날짜 범위 제한 없음 (단, yfinance API 호출 제한을 초과하면 에러 발생 가능성 있음).
     """
 
     response = {
@@ -1078,30 +1075,13 @@ async def stock_history_tool(
 
     try:
         ticker = yf.Ticker(symbol)
-
-        if period and not (start or end):
-            df = ticker.history(
-                period=period,
-                interval="1d",
-                auto_adjust=auto_adjust,
-                back_adjust=back_adjust
-            )
-        else:
-            if not start or not end:
-                response["message"] = "start와 end 날짜를 모두 지정해야 합니다."
-                return response
-            start_date = pd.to_datetime(start).date()
-            end_date = pd.to_datetime(end).date()
-            if (end_date - start_date).days > 31:
-                response["message"] = "최대 31일까지만 조회할 수 있습니다."
-                return response
-            df = ticker.history(
-                start=start,
-                end=end,
-                interval="1d",
-                auto_adjust=auto_adjust,
-                back_adjust=back_adjust
-            )
+        df = ticker.history(
+            start=start,
+            end=end,
+            interval="1d",
+            auto_adjust=auto_adjust,
+            back_adjust=back_adjust
+        )
 
         df = df.dropna(subset=["Close", "Volume"])
         df = df[df["Volume"] > 0]
@@ -1131,13 +1111,11 @@ async def stock_history_tool(
             "message": None
         })
 
-        # 시각화
+        if len(records) <= 1:
+            return response
+
         df_vis = pd.DataFrame(records)
         df_vis["date"] = pd.to_datetime(df_vis["date"])
-
-        # tart/end로 지정한 날짜만 필터링
-        if start and end:
-            df_vis = df_vis[(df_vis["date"] >= pd.to_datetime(start)) & (df_vis["date"] <= pd.to_datetime(end))]
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(
@@ -1179,9 +1157,8 @@ async def stock_history_tool(
 @async_time_logger("kr_stock_history_tool")
 async def kr_stock_history_tool(
     symbol: str,
-    period: Optional[str] = None,
-    start: Optional[str] = None,
-    end: Optional[str] = None,
+    start: str,
+    end: str,
 ) -> Dict[str, Any]:
     """
     한국 주식 OHLCV 데이터를 조회합니다 (FinanceDataReader).
@@ -1192,14 +1169,12 @@ async def kr_stock_history_tool(
 
     Args:
         symbol (str): 6자리 숫자 티커 (예: '005930').
-        period (str, optional): 조회 기간 ('1d', '5d', '7d', '1mo'만 사용 가능. **'1w', '2w' 등은 사용 금지**).
-                                start/end를 지정하지 않는 경우에만 사용.
-        start (str, optional): 조회 시작일 (YYYY-MM-DD). period와 함께 사용할 수 없음.
-        end (str, optional): 조회 종료일 (YYYY-MM-DD). period와 함께 사용할 수 없음.
+        start (str): 조회 시작일 (YYYY-MM-DD).
+        end (str): 조회 종료일 (YYYY-MM-DD).
 
     Notes:
-        - **period 또는 start/end 중 하나만 선택**해야 합니다. 둘 다 지정하면 period가 우선 적용됩니다.
-        - start와 end로 조회 시, 최대 조회 가능 기간은 31일입니다.
+        - **start와 end 날짜를 반드시 지정**해야 합니다.
+        - 날짜 범위 제한 없음 (단, FDR 제공 데이터 범위 내에서만 가능).
     """
 
     response = {
@@ -1215,29 +1190,7 @@ async def kr_stock_history_tool(
         return response
 
     try:
-        if period and not (start or end):
-            df = fdr.DataReader(symbol)
-            if period == '1d':
-                df = df.tail(1)
-            elif period == '5d':
-                df = df.tail(5)
-            elif period == '7d':
-                df = df.tail(7)
-            elif period == '1mo':
-                df = df.tail(30)
-            else:
-                response["message"] = f"지원하지 않는 period 값입니다: {period}"
-                return response
-        else:
-            if not start or not end:
-                response["message"] = "start와 end 날짜를 모두 지정해야 합니다."
-                return response
-            start_date = pd.to_datetime(start).date()
-            end_date = pd.to_datetime(end).date()
-            if (end_date - start_date).days > 31:
-                response["message"] = "최대 31일까지만 조회할 수 있습니다."
-                return response
-            df = fdr.DataReader(symbol, start=start, end=end)
+        df = fdr.DataReader(symbol, start=start, end=end)
 
         if df.empty:
             response["message"] = f"티커 '{symbol}'에 대한 데이터를 가져올 수 없습니다."
@@ -1258,13 +1211,11 @@ async def kr_stock_history_tool(
             "message": None
         })
 
-        # 시각화
+        if len(records) <= 1:
+            return response
+
         df_vis = pd.DataFrame(records)
         df_vis["date"] = pd.to_datetime(df_vis["date"])
-
-        # 지정한 기간으로 필터링
-        if start and end:
-            df_vis = df_vis[(df_vis["date"] >= pd.to_datetime(start)) & (df_vis["date"] <= pd.to_datetime(end))]
 
         fig = go.Figure()
 
@@ -1289,7 +1240,6 @@ async def kr_stock_history_tool(
             font=dict(family="Noto Sans CJK KR")
         )
 
-        # 주말 구간 제외 (토, 일 → 월)
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
 
         key = f"stocks/{slugify(symbol)}_chart.png"
@@ -1581,8 +1531,8 @@ async def weather_tool(
         return {"error": f"오류 발생: {str(e)}"}
 
 tools = [
-    es_news_search_tool,
-    gnews_search_tool,
+    domestic_it_news_search_tool,
+    foreign_news_search_tool,
     community_search_tool,
     search_web_tool,
     youtube_video_tool,
