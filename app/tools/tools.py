@@ -618,7 +618,8 @@ async def google_trends_timeseries_tool(query: str, start_date: str = None, end_
         fig.update_layout(
             xaxis_title="날짜",
             yaxis_title="관심도",
-            height=400
+            height=400,
+            font=dict(family="Noto Sans CJK KR")
         )
 
         # S3에 업로드
@@ -813,7 +814,7 @@ async def generate_news_trend_report_tool(
         return [{"error": f"[GPT 또는 S3 처리 실패] {str(e)}"}]
 
 def generate_keyword_bar_chart(keywords, counts, date_start, date_end) -> str:
-    plt.rcParams['font.family'] = 'AppleGothic'
+    plt.rcParams['font.family'] = 'Noto Sans CJK KR'
     plt.rcParams['axes.unicode_minus'] = False
 
     plt.figure(figsize=(8, 5))
@@ -955,7 +956,8 @@ async def news_trend_chart_tool(
     )
     fig_main.update_layout(
         margin=dict(l=120, r=20, t=50, b=20),
-        yaxis=dict(categoryorder="total ascending")
+        yaxis=dict(categoryorder="total ascending"),
+        font=dict(family="Noto Sans CJK KR")
     )
     key_main = f"{key_prefix}/main-bar.png"
     chart_url = upload_chart_to_s3(fig_main, key_main)
@@ -993,7 +995,8 @@ async def news_trend_chart_tool(
                 title=f"{keyword_name} 연관 키워드 비율", height=350
             )
             fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-            fig_pie.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+            fig_pie.update_layout(margin=dict(l=20, r=20, t=40, b=20),
+                                  font=dict(family="Noto Sans CJK KR"))
             pie_key = f"{key_prefix}/pie_{kw.get('id') or kw.get('keywordId')}.png"
             pie_url = upload_chart_to_s3(fig_pie, pie_key)
             related_chart_url = pie_url
@@ -1153,7 +1156,8 @@ async def stock_history_tool(
             xaxis=dict(title="날짜"),
             yaxis=dict(title="종가", tickprefix="$"),
             yaxis2=dict(title="거래량", overlaying="y", side="right"),
-            height=400
+            height=400,
+            font=dict(family="Noto Sans CJK KR")
         )
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
 
@@ -1281,7 +1285,8 @@ async def kr_stock_history_tool(
             xaxis=dict(title="날짜"),
             yaxis=dict(title="종가"),
             yaxis2=dict(title="거래량", overlaying="y", side="right"),
-            height=400
+            height=400,
+            font=dict(family="Noto Sans CJK KR")
         )
 
         # 주말 구간 제외 (토, 일 → 월)
