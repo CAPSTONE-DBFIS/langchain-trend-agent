@@ -21,8 +21,10 @@ async def agent_query(
     chat_room_id: int = Form(...),
     member_id: str = Form(...),
     persona_id: int = Form(None),
+    model_type: str = Form("claude"),
     files: List[UploadFile] = File(None)
 ):
+
     file_statuses = None
 
     if files:
@@ -42,6 +44,4 @@ async def agent_query(
                     "error": str(e)
                 })
 
-    return await AgentChatService.stream_response(
-        query, chat_room_id, member_id, persona_id, file_statuses=file_statuses
-    )
+    return await AgentChatService.stream_response( query, chat_room_id, member_id, persona_id, file_statuses, model_type)
