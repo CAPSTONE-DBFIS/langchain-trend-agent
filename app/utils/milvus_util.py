@@ -31,19 +31,7 @@ def get_domestic_article_vector_store():
         vector_field="embedding"
     )
 
-def get_team_file_vector_store():
-    """팀 공유 파일 벡터 저장소를 반환"""
-    return Milvus(
-        embedding_function=get_embedding_model(),
-        collection_name="team_shared_files",
-        connection_args={"uri": f"tcp://{os.getenv('MILVUS_HOST')}:{os.getenv('MILVUS_PORT')}"},
-        auto_id=True,
-        text_field="content",
-        vector_field="embedding"
-    )
-
 def get_personal_file_vector_store():
-    """개인 공유 파일 벡터 저장소를 반환"""
     return Milvus(
         embedding_function=get_embedding_model(),
         collection_name="personal_files",

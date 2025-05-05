@@ -4,12 +4,6 @@ import redis
 
 load_dotenv()
 
-import os
-import redis
-from dotenv import load_dotenv
-
-load_dotenv()
-
 def get_redis_client():
     """Redis 클라이언트 연결."""
     required_vars = ["REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD"]
@@ -32,3 +26,13 @@ def get_redis_client():
         raise ValueError(f"Redis 연결 실패: REDIS_HOST 및 REDIS_PORT를 확인하세요. {str(e)}")
     except Exception as e:
         raise ValueError(f"Redis 연결 중 오류: {str(e)}")
+
+def clear_all_cache_db():
+    """
+    현재 선택된 Redis 데이터베이스의 모든 키를 삭제합니다.
+    """
+    r = get_redis_client()
+    r.flushdb()
+    print("현재 Redis DB의 모든 키를 삭제했습니다.")
+
+# clear_all_cache_db()
