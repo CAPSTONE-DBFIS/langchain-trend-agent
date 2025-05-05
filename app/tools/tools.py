@@ -1388,7 +1388,7 @@ async def dalle3_image_generation_tool(prompt: str) -> List[Dict[str, Any]]:
     try:
         llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.7)
 
-        template = PromptTemplate.from_template("""
+        template = PromptTemplate.from_template(rf"""
             You are an expert prompt engineer for DALL·E 3.
             Rewrite the following description in **English**, adding vivid, concrete visual details.
 
