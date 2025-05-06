@@ -8,6 +8,9 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+import logging
 
 # 최신 User-Agent (2025년 기준)
 HEADERS = {
@@ -22,6 +25,9 @@ ERROR_MESSAGE = "We are having trouble retrieving the article content.Please ena
 
 def setup_driver():
     """셀레니움 웹드라이버 설정"""
+    # web driver 호출 시에 로깅되던 것을 WARNING 시에만 뜨도록 조정
+    logging.getLogger("WDM").setLevel(logging.WARNING)
+    
     chrome_options = Options()
     chrome_options.add_argument("--headless")  # 브라우저 창 없이 실행
     chrome_options.add_argument("--disable-gpu")
@@ -30,7 +36,9 @@ def setup_driver():
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
     
-    driver = webdriver.Chrome(options=chrome_options)
+    # webdriver-manager 사용하여 ChromeDriver 자동 설치
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
     return driver
 
 def nyt_url_scraper(page=1):
