@@ -190,3 +190,4 @@ __pycache__/
 data/raw/article_data.csv
 *.csv
 logs/project.log
+/scripts/sentiment/my_finetuned_bert1
