@@ -31,10 +31,12 @@ except ImportError:
 3. 모든 문서 처리: python update_sentiment.py --full
 4. 배치 크기 지정: python update_sentiment.py --batch 200
 5. 확인 없이 실행: python update_sentiment.py --full --force
+6. 특정 날짜의 기사만 처리: python update_sentiment.py --date 2024-03-20
 
 주의:
 - 18,000개 이상의 문서를 처리할 때는 메모리 사용량에 주의하세요.
 - --full 옵션으로 실행하면 감정 필드가 없는 모든 문서가 처리됩니다.
+- --date 옵션으로 특정 날짜의 기사만 처리할 수 있습니다.
 """
 
 
@@ -153,7 +155,7 @@ class SentimentAnalyzer:
             self.logger.error(f"감정 분석 오류: {str(e)}")
             return {"sentiment": "neutral", "confidence": 0.0}
 
-    def update_elasticsearch_documents(self, batch_size=100, max_docs=2):  # 기본값을 2로 설정하여 테스트
+    def update_elasticsearch_documents(self, batch_size=100, max_docs=2, target_date=None):
         """Elasticsearch의 문서들을 감정 분석하여 업데이트합니다."""
         self.logger.info("Elasticsearch 문서 감정 분석 시작")
 
@@ -175,24 +177,36 @@ class SentimentAnalyzer:
             if max_docs and max_docs <= 10:
                 self.logger.info(f"테스트 모드: 최대 {max_docs}개 문서만 처리합니다.")
 
-            # 감정 필드가 없는 문서 검색
+            # 쿼리 구성
             query = {
                 "size": batch_size,
                 "query": {
                     "bool": {
                         "must_not": [
                             {"exists": {"field": "sentiment"}}
-                        ]
+                        ],
+                        "must": []
                     }
                 }
             }
+
+            # 날짜 필터 추가
+            if target_date:
+                query["query"]["bool"]["must"].append({
+                    "term": {
+                        "date": target_date
+                    }
+                })
 
             # 처음 검색 실행하여 총 문서 수 파악
             response = es.search(index=ES_INDEX, body=query)
             total_available = response["hits"]["total"]["value"]
 
             if total_available == 0:
-                self.logger.info("분석할 문서가 없습니다. 모든 문서에 이미 감정 필드가 존재합니다.")
+                if target_date:
+                    self.logger.info(f"{target_date} 날짜의 분석할 문서가 없습니다.")
+                else:
+                    self.logger.info("분석할 문서가 없습니다. 모든 문서에 이미 감정 필드가 존재합니다.")
                 return 0
 
             total_docs = min(total_available, max_docs if max_docs is not None else total_available)
@@ -201,6 +215,8 @@ class SentimentAnalyzer:
             if max_docs is None or max_docs > 10:
                 print(f"총 분석할 문서 수: {total_available}개")
                 print(f"배치 크기: {batch_size}개 (약 {total_available // batch_size + 1}개의 배치)")
+                if target_date:
+                    print(f"{target_date} 날짜의 기사만 처리합니다.")
 
                 # 대량 문서 처리 시 배치 크기 조정 제안
                 if total_available > 5000 and batch_size < 200:
@@ -395,7 +411,8 @@ def main():
         parser.add_argument('--full', action='store_true', help='모든 문서 처리 (테스트 모드 비활성화)')
         parser.add_argument('--count', type=int, default=2, help='처리할 최대 문서 수 (기본값: 2)')
         parser.add_argument('--batch', type=int, default=100, help='배치 크기 (기본값: 100)')
-        parser.add_argument('--force', action='store_true', help='확인 메시지 없이 진행')
+        parser.add_argument('--force', action='store_true', default=True, help='확인 메시지 없이 진행')
+        parser.add_argument('--date', type=str, help='처리할 기사의 날짜 (YYYY-MM-DD 형식)')
 
         args = parser.parse_args()
 
@@ -403,13 +420,23 @@ def main():
         max_docs = None if args.full else args.count
         batch_size = args.batch
         force_run = args.force
+        target_date = args.date
+
+        # 날짜 형식 검증
+        if target_date:
+            try:
+                datetime.strptime(target_date, '%Y-%m-%d')
+            except ValueError:
+                print("오류: 날짜는 YYYY-MM-DD 형식이어야 합니다.")
+                return 1
 
         # 모드 정보 출력
         mode_info = "테스트 모드" if test_mode else "전체 모드"
         doc_info = f"최대 {max_docs}개 문서" if max_docs else "모든 문서"
         batch_info = f"배치 크기: {batch_size}"
+        date_info = f"날짜: {target_date}" if target_date else "모든 날짜"
 
-        print(f"실행 모드: {mode_info}, 처리할 문서: {doc_info}, {batch_info}")
+        print(f"실행 모드: {mode_info}, 처리할 문서: {doc_info}, {batch_info}, {date_info}")
 
         # 안전 확인
         if not test_mode and not force_run:
@@ -419,7 +446,11 @@ def main():
                 return 0
 
         analyzer = SentimentAnalyzer()
-        updated_count = analyzer.update_elasticsearch_documents(batch_size=batch_size, max_docs=max_docs)
+        updated_count = analyzer.update_elasticsearch_documents(
+            batch_size=batch_size, 
+            max_docs=max_docs,
+            target_date=target_date
+        )
         print(f"감정 분석 완료: {updated_count}개 문서 업데이트됨")
         return 0
     except Exception as e:
