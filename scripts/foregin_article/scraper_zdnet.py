@@ -276,6 +276,10 @@ def scrape_articles_from_page(page):
             
             # 기사 URL에서 카테고리 추출
             article_category = extract_category_from_article(href)
+            if article_category:
+                article_category = article_category.upper()
+            else:
+                article_category = "IT"
             
             # 기사 정보 저장
             article_data = {
