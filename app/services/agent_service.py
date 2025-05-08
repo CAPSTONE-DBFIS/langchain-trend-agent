@@ -82,7 +82,7 @@ class AgentChatService:
         member_id: str,
         persona_id: int,
         file_statuses: List[dict] | None = None,
-        model_type: str = "gpt-4-o-mini"
+        model_type: str = "gpt-4o-mini"
     ) -> StreamingResponse:
         print(model_type)
         # LLM 초기화
