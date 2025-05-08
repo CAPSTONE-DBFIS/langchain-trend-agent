@@ -121,7 +121,8 @@ class AgentChatService:
                 temperature=0,
                 streaming=True
             ).bind_tools(tools=tools, tool_choice="any")
-
+        else:
+            raise ValueError(f"지원하지 않는 모델 타입입니다: {model_type}")
 
         # 메모리 초기화
         memory = ConversationBufferMemory(
@@ -318,7 +319,7 @@ class AgentChatService:
                         chunk = data.get("chunk")
                         token = ""
 
-                        # Claude 모델 처리 (Anthropic)
+                        # Claude 모델 처리
                         if isinstance(chunk, dict):
                             if chunk.get("type") == "text":  # 'type'이 'text'인 경우만 처리
                                 chunk_text = chunk.get("text", "")
@@ -328,7 +329,7 @@ class AgentChatService:
                                 if new_text.strip():  # 공백이 아닌 경우만 스트리밍
                                     token = new_text
 
-                        # GPT 모델 처리 (OpenAI)
+                        # GPT / Gemini 모델 처리
                         elif hasattr(chunk, "content"):
                             content = chunk.content
                             if isinstance(content, list):
