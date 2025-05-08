@@ -5,7 +5,7 @@ aiohttp==3.11.18
 aiosignal==1.3.2
 altair==5.5.0
 annotated-types==0.7.0
-anthropic==0.45.2
+anthropic==0.50.0
 anyio==4.9.0
 appnope==0.1.4
 argon2-cffi==23.1.0
@@ -53,6 +53,7 @@ elastic-transport==8.17.1
 elasticsearch==8.17.2
 environs==9.5.0
 etelemetry==0.3.1
+eval_type_backport==0.2.2
 eventlet==0.39.1
 executing==2.2.0
 fake-useragent==2.1.0
@@ -60,6 +61,7 @@ fastapi==0.115.12
 fastjsonschema==2.21.1
 feedparser==6.0.11
 filelock==3.16.1
+filetype==1.2.0
 finance-datareader==0.9.96
 Flask==3.1.0
 flask-cors==5.0.1
@@ -73,6 +75,7 @@ gast==0.6.0
 gevent==24.11.1
 gitdb==4.0.12
 GitPython==3.1.44
+google-ai-generativelanguage==0.6.18
 google-api-core==2.24.1
 google-api-python-client==2.160.0
 google-auth==2.38.0
@@ -83,7 +86,8 @@ google_search_results==2.4.2
 googleapis-common-protos==1.66.0
 graphviz==0.20.3
 greenlet==3.1.1
-grpcio==1.60.0
+grpcio==1.72.0rc1
+grpcio-status==1.71.0
 gunicorn==23.0.0
 h11==0.14.0
 h5py==3.13.0
@@ -132,15 +136,18 @@ kiwisolver==1.4.8
 kobert-transformers==0.6.0
 konlpy==0.6.0
 langchain==0.3.25
+langchain-anthropic==0.3.12
 langchain-community==0.3.15
 langchain-core==0.3.58
 langchain-experimental==0.3.4
+langchain-google-genai==2.1.4
 langchain-huggingface==0.1.2
 langchain-milvus==0.1.8
 langchain-openai==0.3.14
 langchain-tavily==0.1.6
 langchain-teddynote==0.3.42
 langchain-text-splitters==0.3.8
+langchain-together==0.3.0
 langgraph==0.3.31
 langgraph-checkpoint==2.0.24
 langgraph-prebuilt==0.1.8
@@ -219,7 +226,7 @@ prometheus_client==0.21.1
 prompt_toolkit==3.0.50
 propcache==0.2.1
 proto-plus==1.26.0
-protobuf==4.25.6
+protobuf==5.29.4
 protoc-gen-openapiv2==0.0.1
 prov==2.0.1
 psutil==7.0.0
@@ -287,6 +294,7 @@ sentence-transformers==3.3.1
 sentencepiece==0.2.0
 setuptools==75.8.0
 sgmllib3k==1.0.0
+shellingham==1.5.4
 simple-websocket==1.1.0
 simplejson==3.20.1
 six==1.17.0
@@ -300,6 +308,7 @@ stack-data==0.6.3
 starlette==0.46.1
 streamlit==1.43.2
 sympy==1.13.1
+tabulate==0.9.0
 tavily-python==0.5.0
 tenacity==9.1.2
 tensorboard==2.19.0
@@ -313,6 +322,7 @@ threadpoolctl==3.5.0
 tiktoken==0.9.0
 tinycss2==1.4.0
 tld==0.13
+together==1.5.7
 tokenizers==0.21.0
 toml==0.10.2
 torch==2.5.1
@@ -324,6 +334,7 @@ traits==7.0.2
 transformers==4.48.0
 trio==0.28.0
 trio-websocket==0.11.1
+typer==0.15.3
 types-python-dateutil==2.9.0.20241206
 types-requests==2.32.0.20241016
 typing-inspect==0.9.0

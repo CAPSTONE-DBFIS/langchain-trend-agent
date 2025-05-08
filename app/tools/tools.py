@@ -68,27 +68,40 @@ def async_time_logger(name: str):
 load_dotenv()
 KST = timezone(timedelta(hours=9))
 
-
 @tool
-@async_time_logger("es_news_search_tool")
-async def es_news_search_tool(
+@async_time_logger("domestic_it_news_search_tool")
+async def domestic_it_news_search_tool(
     keyword: str,
     date_start: str | None = None,
     date_end: str | None = None
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
-    Elasticsearch IT 뉴스 검색 도구 (기간 필터 포함)
+    Elasticsearch IT 뉴스 검색 도구
 
-    When to use
+    When to use:
         • 키워드 기반으로 국내 IT 뉴스를 정확히 검색해야 할 때
         • 날짜 범위 내 관련 뉴스를 찾고 싶을 때
 
-    Args
-        keyword (str): 검색 키워드 (예: "cloud", "AI")
-        date_start (str): 시작일 (YYYY-MM-DD) - 생략시 KST '60일전'
-        date_end (str, optional): 종료일 (YYYY-MM-DD) – 생략 시 KST ‘어제’
-    """
+    Args:
+        keyword (str): 검색할 주요 키워드
+        date_start (str, optional): 검색 시작일 (YYYY-MM-DD), 기본 60일 전
+        date_end (str, optional): 검색 종료일 (YYYY-MM-DD), 기본 어제
 
+    Returns:
+        Dict[str, Any]:
+            - keyword (str)
+            - date_start (str)
+            - date_end (str)
+            - results (List[Dict]):
+                - title (str)
+                - content (str)
+                - date (str)
+                - url (str)
+                - media_company (str)
+
+    Notes:
+    • 오늘 날짜(00시 이후) 또는 미래 날짜는 지원되지 않습니다.
+    """
     if date_start is None:
         date_start = (
             datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=60)
@@ -101,11 +114,10 @@ async def es_news_search_tool(
 
     # 캐시 조회
     r = get_redis_client()
-    cache_key = f"news:es:{keyword}:{date_start}:{date_end}"
+    cache_key = f"news:es:flat:{keyword}:{date_start}:{date_end}"
     if (cached := r.get(cache_key)):
         return json.loads(cached)
 
-    # Elasticsearch 연결
     es = Elasticsearch(
         hosts=[f"http://{os.getenv('ELASTICSEARCH_HOST')}:{os.getenv('ELASTICSEARCH_PORT')}"],
         basic_auth=(
@@ -126,15 +138,15 @@ async def es_news_search_tool(
                                 "lte": f"{date_end}T23:59:59"
                             }
                         }
+                    },
+                    {
+                        "match": {
+                            "title": {
+                                "query": keyword
+                            }
+                        }
                     }
-                ],
-                "should": [
-                    # 제목에 키워드 포함 (가중치 높음)
-                    {"match": {"title": {"query": keyword, "boost": 3}}},
-                    # 본문에 키워드 포함 (가중치 낮음)
-                    {"match": {"content": {"query": keyword, "boost": 1}}}
-                ],
-                "minimum_should_match": 1
+                ]
             }
         },
         "sort": [
@@ -145,7 +157,6 @@ async def es_news_search_tool(
         "size": 10
     }
 
-    # 검색 실행
     try:
         result = es.search(
             index=os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME"),
@@ -153,86 +164,108 @@ async def es_news_search_tool(
         )
         hits = result.get("hits", {}).get("hits", [])
 
-        parsed = [
-            {
-                "title": h["_source"].get("title"),
-                "date": h["_source"].get("date"),
-                "media_company": h["_source"].get("media_company"),
-                "url": h["_source"].get("url"),
-                "content": h["_source"].get("content", "")[:1000],
-            }
-            for h in hits
-        ]
+        result = {
+            "keyword": keyword,
+            "date_start": date_start,
+            "date_end": date_end,
+            "results": []
+        }
+        for h in hits:
+            source = h["_source"]
+            result["results"].append({
+                "title": source.get("title", ""),
+                "content": (source.get("content") or "")[:1000],
+                "date": source.get("date", ""),
+                "url": source.get("url", ""),
+                "media_company": source.get("media_company", "")
+            })
 
-        # 캐시 저장
-        r.set(cache_key, json.dumps(parsed, ensure_ascii=False))
-        return parsed
+        r.set(cache_key, json.dumps(result, ensure_ascii=False))
+        return result
 
     except Exception as e:
-        return [{"error": f"Elasticsearch 검색 실패: {str(e)}"}]
-
+        return {"error": f"Elasticsearch 검색 실패: {str(e)}"}
 
 @tool
-@async_time_logger("gnews_search_tool")
-async def gnews_search_tool(en_keyword: str, lang: str = "en", country: str = "us", max_results: int = 10) -> List[Dict[str, str]]:
+@async_time_logger("gnews_search_tool_list")
+async def foreign_news_search_tool(
+    en_keyword: str, lang: str = "en", country: str = "us", max_results: int = 10
+) -> Dict[str, Any]:
     """
-    GNews API를 이용해 해외 뉴스를 검색합니다.
+    GNews API 해외 뉴스 검색
 
     When to use:
-        - 최신 해외 뉴스 기사를 빠르게 검색할 때.
-        - 글로벌 IT, 경제, 사회 트렌드를 파악할 때.
-        - 영문 또는 다국어 기사 제공이 필요한 경우.
+        • 해외 뉴스 기사 검색이 필요할 때.
+        • 영문 키워드로 글로벌 트렌드 파악.
 
     Args:
-        en_keyword (str): 검색 키워드 (예: 'cloud')
-        lang (str, optional): ISO 639-1 언어 코드, 기본 'en'
-        country (str, optional): ISO 3166-1 알파-2 국가 코드, 기본 'us'
-        max_results (int, optional): 1-100, 기본 10
+        en_keyword (str): 영문 키워드
+        lang (str): 언어 코드, 기본 'en'
+        country (str): 국가 코드, 기본 'us'
+        max_results (int): 최대 기사 수 (기본 10, 최대 20)
+
+    Returns:
+        Dict[str, Any]:
+            - keyword (str)
+            - lang (str)
+            - country (str)
+            - articles (List[Dict]):
+                - title (str)
+                - content (str)
+                - date (str, YYYY-MM-DD HH:MM, KST)
+                - url (str)
+                - media_company (str)
     """
+    api_key = os.getenv("GNEWS_API_KEY")
+    if not api_key:
+        return {"error": "GNews API 키가 설정되지 않았습니다."}
+
+    en_keyword = en_keyword.strip()
+    if re.search(r"[!?&=+/\- ]", en_keyword) and not (en_keyword.startswith('"') and en_keyword.endswith('"')):
+        en_keyword = f'"{en_keyword}"'
+    encoded_query = quote(en_keyword)
+
+    max_results = min(max_results, 20)
+    url = f"https://gnews.io/api/v4/search?q={encoded_query}&lang={lang}&country={country}&max={max_results}&apikey={api_key}"
+
     try:
-        # API 키 확인
-        api_key = os.getenv("GNEWS_API_KEY")
-        if not api_key:
-            return [{"error": "GNews API 키가 설정되지 않았습니다. .env 파일에 GNEWS_API_KEY를 추가하세요."}]
-
-        # 검색어 전처리: 특수문자나 공백 포함 → 자동 "..." 감싸기
-        en_keyword = en_keyword.strip()
-        if re.search(r"[!?&=+/\- ]", en_keyword) and not (en_keyword.startswith('"') and en_keyword.endswith('"')):
-            en_keyword = f'"{en_keyword}"'
-        encoded_query = quote(en_keyword)
-
-        # 요청 URL 구성
-        max_results = min(max_results, 20)
-        url = f"https://gnews.io/api/v4/search?q={encoded_query}&lang={lang}&country={country}&max={max_results}&apikey={api_key}"
-
-        # API 호출
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 if response.status != 200:
                     error_text = await response.text()
-                    raise Exception(f"GNews API 요청 실패: {response.status} - {error_text}")
+                    raise Exception(f"GNews API 오류 {response.status}: {error_text}")
                 data = await response.json()
 
-        # 응답 파싱
         articles = data.get("articles", [])
         if not articles:
-            return [{"error": f"'{en_keyword}'에 대한 최신 뉴스를 찾을 수 없습니다."}]
+            return {
+                "keyword": en_keyword,
+                "lang": lang,
+                "country": country,
+                "articles": []
+            }
 
-        parsed_articles = []
-        for article in articles:
+        result = {
+            "keyword": en_keyword,
+            "lang": lang,
+            "country": country,
+            "articles": []
+        }
+
+        for article in articles[:max_results]:
             published_at = parser.parse(article["publishedAt"]).astimezone(KST).strftime("%Y-%m-%d %H:%M")
-            parsed_articles.append({
+            result["articles"].append({
                 "title": article.get("title", ""),
-                "date": published_at,
-                "media_company": article["source"]["name"],
-                "url": article["url"],
                 "content": article.get("content") or article.get("description") or "",
+                "date": published_at,
+                "url": article.get("url", ""),
+                "media_company": article["source"]["name"]
             })
 
-        return parsed_articles
+        return result
 
     except Exception as e:
-        return [{"error": f"GNews 검색 실패: {str(e)}"}]
+        return {"error": f"GNews 검색 실패: {str(e)}"}
 
 
 @async_time_logger("search_daum_blogs")
@@ -325,21 +358,36 @@ async def search_naver_blogs(keyword: str, max_result: int = 10) -> List[Dict[st
         raise RuntimeError(f"Naver 블로그 검색 오류: {str(e)}")
 
 @tool
-@async_time_logger("community_search_tool")
-async def community_search_tool(korean_keyword: str, english_keyword: str, platform: str = "all", max_results: int = 10) -> List[Dict[str, str]]:
+@async_time_logger("community_search_tool_list")
+async def community_search_tool(
+    korean_keyword: str,
+    english_keyword: str,
+    platform: str = "all",
+    max_results: int = 10
+) -> Dict[str, Any]:
     """
-    블로그·커뮤니티(Daum, Naver, Reddit)에서 게시글을 검색합니다.
+    블로그·커뮤니티 게시글 검색 (리스트 반환)
 
     When to use:
-        - 국내 블로그와 해외 Reddit의 여론을 동시에 파악할 때.
-        - 플랫폼별 사용자 의견과 트렌드를 비교 분석할 때.
-        - 시간순으로 정렬해 여론 흐름을 확인하고 싶을 때.
+        • 블로그, Reddit 등 여론을 분석할 때.
 
     Args:
-        korean_keyword (str): 한글 검색어(Daum·Naver)
-        english_keyword (str): 영어 검색어(Reddit)
-        platform (str, optional): 'daum' | 'naver' | 'reddit' | 'all', 기본 'all'
-        max_results (int, optional): 플랫폼별 최대 결과 수, 기본 10
+        korean_keyword (str): 한국어 키워드
+        english_keyword (str): 영어 키워드
+        platform (str): 'all' | 'daum' | 'naver' | 'reddit'
+        max_results (int): 최대 결과 수
+
+    Returns:
+        Dict[str, Any]:
+            - korean_keyword (str)
+            - english_keyword (str)
+            - platform (str)
+            - posts (List[Dict]):
+                - title (str)
+                - url (str)
+                - content (str)
+                - datetime (str, YYYY-MM-DD HH:MM)
+                - source (str)
     """
     tasks = []
     if platform in ["all", "daum"]:
@@ -351,7 +399,16 @@ async def community_search_tool(korean_keyword: str, english_keyword: str, platf
 
     results_nested = await asyncio.gather(*tasks)
     results = [item for sublist in results_nested for item in sublist]
-    return sorted(results, key=lambda x: x["datetime"], reverse=True)[:max_results * (3 if platform == "all" else 1)]
+
+    # 최신순 정렬
+    results_sorted = sorted(results, key=lambda x: x["datetime"], reverse=True)
+
+    return {
+        "korean_keyword": korean_keyword,
+        "english_keyword": english_keyword,
+        "platform": platform,
+        "posts": results_sorted[:max_results]
+    }
 
 
 def get_reddit_access_token():
@@ -417,13 +474,14 @@ async def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, s
 
     Args:
         keyword (str): 검색 키워드
-        max_results (int, optional): 1-10, 기본 10
+        max_results (int, optional): 1-20, 기본 10
     """
 
     tavily_tool = TavilySearch(
         max_results=max_results,
         include_answer=True,
-        search_depth='basic'
+        search_depth='basic',
+        include_images=True
     )
     return tavily_tool.invoke({"query": keyword})
 
@@ -583,6 +641,18 @@ async def google_trends_timeseries_tool(query: str, start_date: str = None, end_
         query (str): 검색 키워드
         start_date (str, optional): YYYY-MM-DD, 기본 최근 한 달
         end_date   (str, optional): YYYY-MM-DD
+
+    Returns:
+        Dict[str, Union[str, List[float], List[str]]]:
+            - query (str): 조회한 키워드
+            - interest_data (List[float]): 날짜별 관심도 수치
+            - dates (List[str]): 날짜 리스트 (YYYY-MM-DD)
+            - chart_url (str): 관심도 시계열 그래프 S3 URL
+            - chart_description (str): 그래프 설명 텍스트
+            - error (str, 선택): 오류 발생 시 메시지
+
+    Notes:
+        chart_url과 chart_description은 시각화 삽입용으로 활용됩니다.
     """
     try:
         pytrends = TrendReq(hl="ko", tz=540)
@@ -618,7 +688,8 @@ async def google_trends_timeseries_tool(query: str, start_date: str = None, end_
         fig.update_layout(
             xaxis_title="날짜",
             yaxis_title="관심도",
-            height=400
+            height=400,
+            font=dict(family="Noto Sans CJK KR")
         )
 
         # S3에 업로드
@@ -661,7 +732,6 @@ async def generate_news_trend_report_tool(
 
     Notes:
         • 오늘 날짜(00시 이후) 또는 미래 날짜는 지원되지 않습니다.
-        • Redis 캐시 7일, 동일 날짜 재요청 시 즉시 URL 반환.
     """
     kst = ZoneInfo("Asia/Seoul")
     kst_now = datetime.now(kst)
@@ -813,7 +883,7 @@ async def generate_news_trend_report_tool(
         return [{"error": f"[GPT 또는 S3 처리 실패] {str(e)}"}]
 
 def generate_keyword_bar_chart(keywords, counts, date_start, date_end) -> str:
-    plt.rcParams['font.family'] = 'AppleGothic'
+    plt.rcParams['font.family'] = 'Noto Sans CJK KR'
     plt.rcParams['axes.unicode_minus'] = False
 
     plt.figure(figsize=(8, 5))
@@ -900,26 +970,50 @@ async def news_trend_chart_tool(
     period: str,   # "daily" 또는 "weekly"
     date: str
 ) -> Dict[str, Any]:
+
     """
-    일간 또는 주간 트렌드를 조회하고 차트를 생성합니다.
+    특정 날짜의 일간, 주간 메인 및 연관 트렌드를 조회하고,
+    메인 키워드 인기 차트 및 각 키워드별 연관 키워드 차트를 제공합니다.
 
     When to use:
-        - 어제의 트렌드, 일주일의 트렌드를 조회할 때.
-        - 날짜 기준으로 IT 뉴스 트렌드를 분석할 때.
-        - 키워드 패턴과 차트, 기사 흐름을 파악하고 싶을 때.
+        - 어제 또는 특정 주간의 트렌드를 조회할 때.
+        - 날짜 기준 IT 뉴스 트렌드를 분석할 때.
+        - 키워드 패턴, 인기 키워드, 연관 키워드, 기사 흐름을 파악하고 싶을 때.
 
     Args:
         period (str): "daily" 또는 "weekly"
-        date (str): YYYY-MM-DD
+        date (str): 기준 날짜 (YYYY-MM-DD)
+
+    Returns:
+        Dict[str, Any]:
+            - date (str): 기준 날짜
+            - chart_url (str): 메인 키워드 막대 그래프 S3 URL
+            - chart_description (str): 메인 차트 설명
+            - keywords (List[Dict]):
+                - keyword (str): 키워드명
+                - frequency (int): 빈도수
+                - related_keywords (List[Dict]):
+                    - keyword (str)
+                    - frequency (int)
+                - related_chart_url (str | None): 연관 키워드 파이차트 S3 URL
+                - articles (List[Dict]):
+                    - title (str)
+                    - content (str)
+                    - date (str)
+                    - url (str)
+                    - media_company (str)
+
+    Notes:
+        chart_url과 chart_description은 메인 키워드 시각화 삽입용으로 사용됩니다.
+        keywords 내 related_chart_url은 각 키워드별 연관 키워드 시각화(파이 차트) 삽입용으로 활용됩니다.
     """
 
     # Redis 캐시
     r = get_redis_client()
-    cache_key = f"{period}_trend_with_charts:{date}"
+    cache_key = f"{period}_trend_with_charts_list:{date}"
     if (cached := r.get(cache_key)):
         return json.loads(cached)
 
-    # 데이터 조회
     if period == "daily":
         resp = requests.get(f"http://localhost:8080/api/insight?date={date}")
         records = resp.json().get("top_keywords", [])
@@ -939,12 +1033,11 @@ async def news_trend_chart_tool(
     if not records:
         return {
             "date": date,
-            "main_chart_url": None,
-            "main_chart_description": None,
+            "chart_url": None,
+            "chart_description": None,
             "keywords": []
         }
 
-    # 메인 차트 생성
     df_main = pd.DataFrame({
         "keyword": [kw["keyword"] for kw in records],
         "frequency": [kw.get("frequency") or kw.get("totalFrequency") for kw in records],
@@ -955,15 +1048,13 @@ async def news_trend_chart_tool(
     )
     fig_main.update_layout(
         margin=dict(l=120, r=20, t=50, b=20),
-        yaxis=dict(categoryorder="total ascending")
+        yaxis=dict(categoryorder="total ascending"),
+        font=dict(family="Noto Sans CJK KR")
     )
     key_main = f"{key_prefix}/main-bar.png"
     chart_url = upload_chart_to_s3(fig_main, key_main)
 
-    # 키워드별 도넛 차트 + 기사 조회
-    keywords_data = []
-
-    # 기사 조회 병렬화
+    # 기사 비동기 fetch
     article_tasks = {
         kw["keyword"]: asyncio.create_task(fetch_domestic_articles(
             keyword=kw["keyword"],
@@ -973,92 +1064,81 @@ async def news_trend_chart_tool(
         for kw in records
     }
 
+    keyword_list = []
     for kw in records:
         keyword_name = kw["keyword"]
         rels = kw.get("relatedKeywords", [])
 
-        # 관련 키워드 문자열 리스트
-        related_keywords = [r["relatedKeyword"] for r in rels]
-
-        # 관련 키워드 차트
-        df_pie = pd.DataFrame([
-            {"related": r["relatedKeyword"], "freq": r["frequency"]}
+        related_keywords = [
+            {"keyword": r["relatedKeyword"], "frequency": r["frequency"]}
             for r in rels if r["frequency"] > 0
-        ])
+        ]
+
+        df_pie = pd.DataFrame(related_keywords)
         related_chart_url = None
-        related_chart_description = None
         if not df_pie.empty:
             fig_pie = px.pie(
-                df_pie, names="related", values="freq", hole=0.4,
+                df_pie, names="keyword", values="frequency", hole=0.4,
                 title=f"{keyword_name} 연관 키워드 비율", height=350
             )
             fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-            fig_pie.update_layout(margin=dict(l=20, r=20, t=40, b=20))
             pie_key = f"{key_prefix}/pie_{kw.get('id') or kw.get('keywordId')}.png"
-            pie_url = upload_chart_to_s3(fig_pie, pie_key)
-            related_chart_url = pie_url
-            related_chart_description = f"{keyword_name} 연관 키워드 비율 차트"
+            related_chart_url = upload_chart_to_s3(fig_pie, pie_key)
 
-        # 기사
-        articles_raw = await article_tasks[keyword_name]
-        articles = [
-            {
-                "title": a["title"],
-                "url": a["url"],
-                "media_company": a["media_company"],
-                "date": a["date"],
-                "content": a["content"]
-            }
-            for a in articles_raw[:5]
-        ]
-
-        keywords_data.append({
+        articles = await article_tasks[keyword_name]
+        keyword_list.append({
             "keyword": keyword_name,
-            "related_keywords": related_keywords[:5],
+            "frequency": kw.get("frequency") or kw.get("totalFrequency"),
+            "related_keywords": related_keywords,
             "related_chart_url": related_chart_url,
-            "related_chart_description": related_chart_description,
-            "articles": articles
+            "articles": articles[:5]
         })
 
-    result = {
+    final_result = {
         "date": date,
-        "main_chart_url": chart_url,
-        "main_chart_description": chart_title + " 막대 그래프",
-        "keywords": keywords_data
+        "chart_url": chart_url,
+        "chart_description": chart_title + " 막대 그래프",
+        "keywords": keyword_list
     }
 
-    # 캐싱
-    r.set(cache_key, json.dumps(result, ensure_ascii=False))
-    return result
+    r.set(cache_key, json.dumps(final_result, ensure_ascii=False))
+    return final_result
 
 
 @tool
 @async_time_logger("stock_history_tool")
 async def stock_history_tool(
     symbol: str,
-    period: Optional[str] = None,
-    start: Optional[str] = None,
-    end: Optional[str] = None,
+    start: str,
+    end: str,
     auto_adjust: bool = True,
     back_adjust: bool = False,
 ) -> Dict[str, Any]:
     """
-    미국·글로벌 주식 OHLCV 데이터를 조회합니다 (yfinance).
+    미국·글로벌 주식 OHLCV 데이터 조회 (yfinance)
 
     When to use:
-        - 글로벌 주식의 시세 데이터를 확인할 때.
-        - 배당·분할 보정된 주식 흐름을 분석하고 싶을 때.
+        • 글로벌 주식 시세 및 거래량 분석할 때.
 
     Args:
-        symbol (str): 티커 심볼.
-        period (str, optional): 조회 기간 ('1d', '5d', '7d', '14d', '1mo'만 사용 가능. '1w', '2w' 등은 사용 금지).
-                                start/end를 지정하지 않는 경우에만 사용.
-        start (str, optional): 조회 시작일 (YYYY-MM-DD). period와 **함께 사용할 수 없음**.
-        end (str, optional): 조회 종료일 (YYYY-MM-DD). period와 **함께 사용할 수 없음**.
+        symbol (str): 티커 심볼
+        start (str): 시작일 (YYYY-MM-DD)
+        end (str): 종료일 (YYYY-MM-DD)
+        auto_adjust (bool): 배당·분할 보정 여부
+        back_adjust (bool): 백어드저스트 여부
 
-    Notes:
-        - **period 또는 start/end 중 하나만 선택**해야 합니다. 둘 다 지정하면 period가 우선 적용됩니다.
-        - start와 end로 조회 시, 최대 조회 가능 기간은 31일입니다.
+    Returns:
+        Dict:
+            - symbol (str)
+            - history (List[Dict]):
+                - date (str)
+                - open/high/low/close (float)
+                - volume (int)
+            - info (Dict)
+            - status (str)
+            - message (str or None)
+            - chart_url (str)
+            - chart_description (str)
     """
 
     response = {
@@ -1075,30 +1155,13 @@ async def stock_history_tool(
 
     try:
         ticker = yf.Ticker(symbol)
-
-        if period and not (start or end):
-            df = ticker.history(
-                period=period,
-                interval="1d",
-                auto_adjust=auto_adjust,
-                back_adjust=back_adjust
-            )
-        else:
-            if not start or not end:
-                response["message"] = "start와 end 날짜를 모두 지정해야 합니다."
-                return response
-            start_date = pd.to_datetime(start).date()
-            end_date = pd.to_datetime(end).date()
-            if (end_date - start_date).days > 31:
-                response["message"] = "최대 31일까지만 조회할 수 있습니다."
-                return response
-            df = ticker.history(
-                start=start,
-                end=end,
-                interval="1d",
-                auto_adjust=auto_adjust,
-                back_adjust=back_adjust
-            )
+        df = ticker.history(
+            start=start,
+            end=end,
+            interval="1d",
+            auto_adjust=auto_adjust,
+            back_adjust=back_adjust
+        )
 
         df = df.dropna(subset=["Close", "Volume"])
         df = df[df["Volume"] > 0]
@@ -1128,13 +1191,11 @@ async def stock_history_tool(
             "message": None
         })
 
-        # 시각화
+        if len(records) <= 1:
+            return response
+
         df_vis = pd.DataFrame(records)
         df_vis["date"] = pd.to_datetime(df_vis["date"])
-
-        # tart/end로 지정한 날짜만 필터링
-        if start and end:
-            df_vis = df_vis[(df_vis["date"] >= pd.to_datetime(start)) & (df_vis["date"] <= pd.to_datetime(end))]
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(
@@ -1153,7 +1214,8 @@ async def stock_history_tool(
             xaxis=dict(title="날짜"),
             yaxis=dict(title="종가", tickprefix="$"),
             yaxis2=dict(title="거래량", overlaying="y", side="right"),
-            height=400
+            height=400,
+            font=dict(family="Noto Sans CJK KR")
         )
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
 
@@ -1175,27 +1237,31 @@ async def stock_history_tool(
 @async_time_logger("kr_stock_history_tool")
 async def kr_stock_history_tool(
     symbol: str,
-    period: Optional[str] = None,
-    start: Optional[str] = None,
-    end: Optional[str] = None,
+    start: str,
+    end: str,
 ) -> Dict[str, Any]:
     """
-    한국 주식 OHLCV 데이터를 조회합니다 (FinanceDataReader).
+    한국 주식 OHLCV 데이터 조회 (FinanceDataReader)
 
     When to use:
-        - 한국 주식의 일별 시세 데이터를 확인할 때.
-        - 국내 시장 분석이나 투자 트렌드를 파악하고 싶을 때.
+        • 한국 주식 시세 및 거래량 분석할 때.
 
     Args:
-        symbol (str): 6자리 숫자 티커 (예: '005930').
-        period (str, optional): 조회 기간 ('1d', '5d', '7d', '1mo'만 사용 가능. **'1w', '2w' 등은 사용 금지**).
-                                start/end를 지정하지 않는 경우에만 사용.
-        start (str, optional): 조회 시작일 (YYYY-MM-DD). period와 함께 사용할 수 없음.
-        end (str, optional): 조회 종료일 (YYYY-MM-DD). period와 함께 사용할 수 없음.
+        symbol (str): 6자리 종목 코드
+        start (str): 시작일 (YYYY-MM-DD)
+        end (str): 종료일 (YYYY-MM-DD)
 
-    Notes:
-        - **period 또는 start/end 중 하나만 선택**해야 합니다. 둘 다 지정하면 period가 우선 적용됩니다.
-        - start와 end로 조회 시, 최대 조회 가능 기간은 31일입니다.
+    Returns:
+        Dict:
+            - symbol (str)
+            - history (List[Dict]):
+                - date (str)
+                - open/high/low/close (float)
+                - volume (int)
+            - status (str)
+            - message (str or None)
+            - chart_url (str)
+            - chart_description (str)
     """
 
     response = {
@@ -1211,29 +1277,7 @@ async def kr_stock_history_tool(
         return response
 
     try:
-        if period and not (start or end):
-            df = fdr.DataReader(symbol)
-            if period == '1d':
-                df = df.tail(1)
-            elif period == '5d':
-                df = df.tail(5)
-            elif period == '7d':
-                df = df.tail(7)
-            elif period == '1mo':
-                df = df.tail(30)
-            else:
-                response["message"] = f"지원하지 않는 period 값입니다: {period}"
-                return response
-        else:
-            if not start or not end:
-                response["message"] = "start와 end 날짜를 모두 지정해야 합니다."
-                return response
-            start_date = pd.to_datetime(start).date()
-            end_date = pd.to_datetime(end).date()
-            if (end_date - start_date).days > 31:
-                response["message"] = "최대 31일까지만 조회할 수 있습니다."
-                return response
-            df = fdr.DataReader(symbol, start=start, end=end)
+        df = fdr.DataReader(symbol, start=start, end=end)
 
         if df.empty:
             response["message"] = f"티커 '{symbol}'에 대한 데이터를 가져올 수 없습니다."
@@ -1254,13 +1298,11 @@ async def kr_stock_history_tool(
             "message": None
         })
 
-        # 시각화
+        if len(records) <= 1:
+            return response
+
         df_vis = pd.DataFrame(records)
         df_vis["date"] = pd.to_datetime(df_vis["date"])
-
-        # 지정한 기간으로 필터링
-        if start and end:
-            df_vis = df_vis[(df_vis["date"] >= pd.to_datetime(start)) & (df_vis["date"] <= pd.to_datetime(end))]
 
         fig = go.Figure()
 
@@ -1281,10 +1323,10 @@ async def kr_stock_history_tool(
             xaxis=dict(title="날짜"),
             yaxis=dict(title="종가"),
             yaxis2=dict(title="거래량", overlaying="y", side="right"),
-            height=400
+            height=400,
+            font=dict(family="Noto Sans CJK KR")
         )
 
-        # 주말 구간 제외 (토, 일 → 월)
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
 
         key = f"stocks/{slugify(symbol)}_chart.png"
@@ -1369,21 +1411,25 @@ async def namuwiki_tool(keyword: str) -> List[Dict[str, Any]]:
 @async_time_logger("dalle3_image_generation_tool")
 async def dalle3_image_generation_tool(prompt: str) -> List[Dict[str, Any]]:
     """
-    DALL·E 3으로 이미지를 생성합니다.
+    DALL·E 3 이미지 생성
 
     When to use:
-        - 트렌드나 개념을 시각화한 이미지가 필요할 때.
-        - 창의적인 콘텐츠 제작이나 보고서에 삽입할 이미지를 만들 때.
+        • 트렌드나 개념 시각화 이미지 필요할 때.
 
     Args:
-        prompt (str): 원본 프롬프트(자동어)
+        prompt (str): 이미지 설명 (자연어)
+
+    Returns:
+        List[Dict]:
+            - content (str): '이미지 생성 완료'
+            - url (str): 이미지 링크
     """
     openai.api_key = os.getenv("DALLE_API_KEY")
 
     try:
         llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.7)
 
-        template = PromptTemplate.from_template("""
+        template = PromptTemplate.from_template(rf"""
             You are an expert prompt engineer for DALL·E 3.
             Rewrite the following description in **English**, adding vivid, concrete visual details.
 
@@ -1426,19 +1472,29 @@ async def weather_tool(
     today_only: bool = False
 ) -> Dict[str, Union[Dict, List, str]]:
     """
-    OpenWeatherMap API로 날씨 정보를 조회합니다.
+    OpenWeatherMap API로 날씨 정보 조회
 
     When to use:
-        - 특정 지역의 현재, 시간별, 일별 날씨를 확인할 때.
-        - 날씨가 트렌드나 이벤트에 미치는 영향을 분석하고 싶을 때.
+        • 특정 지역의 현재, 시간별, 일별 날씨 확인 시.
 
     Args:
-        location (str): 도시명과 국가 코드 (예: "Seoul,KR")
-        lang (str): 날씨 설명 언어 (예: "kr"은 한국어)
-        units (str): 온도 단위 ("metric"은 °C)
-        forecast_types (str): "current", "hourly", "daily" 또는 조합
-        include_extras (bool): 체감 온도, 풍속 등 추가 정보 포함
-        today_only (bool): 당일 데이터만 반환
+        location (str): 도시명+국가코드 (예: "Seoul,KR")
+        lang (str): 언어 (기본 'kr')
+        units (str): 단위 (기본 'metric')
+        forecast_types (str): 'current', 'hourly', 'daily' 조합
+        include_extras (bool): 추가 정보 포함 여부
+        today_only (bool): 당일 데이터만 반환 여부
+
+    Returns:
+        Dict:
+            - current (Dict, 선택):
+                - temp (str)
+                - weather (str)
+                - humidity (int)
+                - extras (Dict)
+            - hourly (List[Dict], 선택)
+            - daily (List[Dict], 선택)
+            - error (str, 오류 시)
     """
     # API 키 확인
     api_key = os.getenv("OPENWEATHERMAP_API_KEY")
@@ -1576,8 +1632,8 @@ async def weather_tool(
         return {"error": f"오류 발생: {str(e)}"}
 
 tools = [
-    es_news_search_tool,
-    gnews_search_tool,
+    domestic_it_news_search_tool,
+    foreign_news_search_tool,
     community_search_tool,
     search_web_tool,
     youtube_video_tool,
