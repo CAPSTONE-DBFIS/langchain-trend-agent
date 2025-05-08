@@ -15,6 +15,7 @@ import aiohttp
 import FinanceDataReader as fdr
 import boto3
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import openai
 import pandas as pd
 import plotly.express as px
@@ -43,15 +44,16 @@ from pypdf import PdfReader
 from requests.auth import HTTPBasicAuth
 from unidecode import unidecode
 from zoneinfo import ZoneInfo
+import arxiv
 
 from app.utils.db_util import get_db_connection
 from app.utils.redis_util import get_redis_client
 from app.utils.s3_util import upload_chart_to_s3
 from app.utils.es_util import fetch_domestic_articles, get_es_client
+from app.tools.tools_schema import *
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
-
 
 def async_time_logger(name: str):
     def decorator(func):
@@ -68,7 +70,7 @@ def async_time_logger(name: str):
 load_dotenv()
 KST = timezone(timedelta(hours=9))
 
-@tool
+@tool(args_schema=DomesticITNewsSearchSchema)
 @async_time_logger("domestic_it_news_search_tool")
 async def domestic_it_news_search_tool(
     keyword: str,
@@ -186,8 +188,8 @@ async def domestic_it_news_search_tool(
     except Exception as e:
         return {"error": f"Elasticsearch 검색 실패: {str(e)}"}
 
-@tool
-@async_time_logger("gnews_search_tool_list")
+@tool(args_schema=ForeignNewsSearchSchema)
+@async_time_logger("foreign_news_search_tool")
 async def foreign_news_search_tool(
     en_keyword: str, lang: str = "en", country: str = "us", max_results: int = 10
 ) -> Dict[str, Any]:
@@ -209,7 +211,7 @@ async def foreign_news_search_tool(
             - keyword (str)
             - lang (str)
             - country (str)
-            - articles (List[Dict]):
+            - results (List[Dict]):
                 - title (str)
                 - content (str)
                 - date (str, YYYY-MM-DD HH:MM, KST)
@@ -242,7 +244,7 @@ async def foreign_news_search_tool(
                 "keyword": en_keyword,
                 "lang": lang,
                 "country": country,
-                "articles": []
+                "results": []
             }
 
         result = {
@@ -254,7 +256,7 @@ async def foreign_news_search_tool(
 
         for article in articles[:max_results]:
             published_at = parser.parse(article["publishedAt"]).astimezone(KST).strftime("%Y-%m-%d %H:%M")
-            result["articles"].append({
+            result["results"].append({
                 "title": article.get("title", ""),
                 "content": article.get("content") or article.get("description") or "",
                 "date": published_at,
@@ -357,8 +359,8 @@ async def search_naver_blogs(keyword: str, max_result: int = 10) -> List[Dict[st
     except Exception as e:
         raise RuntimeError(f"Naver 블로그 검색 오류: {str(e)}")
 
-@tool
-@async_time_logger("community_search_tool_list")
+@tool(args_schema=CommunitySearchSchema)
+@async_time_logger("community_search_tool")
 async def community_search_tool(
     korean_keyword: str,
     english_keyword: str,
@@ -382,7 +384,7 @@ async def community_search_tool(
             - korean_keyword (str)
             - english_keyword (str)
             - platform (str)
-            - posts (List[Dict]):
+            - results (List[Dict]):
                 - title (str)
                 - url (str)
                 - content (str)
@@ -407,7 +409,7 @@ async def community_search_tool(
         "korean_keyword": korean_keyword,
         "english_keyword": english_keyword,
         "platform": platform,
-        "posts": results_sorted[:max_results]
+        "results": results_sorted[:max_results]
     }
 
 
@@ -461,7 +463,7 @@ async def search_reddit_posts(keyword: str, max_result: int = 10) -> List[Dict[s
         raise RuntimeError(f"Reddit 검색 오류: {str(e)}")
 
 
-@tool
+@tool(args_schema=SearchWebSchema)
 @async_time_logger("search_web_tool")
 async def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, str]]:
     """
@@ -480,13 +482,12 @@ async def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, s
     tavily_tool = TavilySearch(
         max_results=max_results,
         include_answer=True,
-        search_depth='basic',
-        include_images=True
+        include_images=True,
     )
     return tavily_tool.invoke({"query": keyword})
 
 
-@tool
+@tool(args_schema=YoutubeVideoSchema)
 @async_time_logger("youtube_video_tool")
 async def youtube_video_tool(query: str, max_results: int = 5):
     """
@@ -526,7 +527,7 @@ async def youtube_video_tool(query: str, max_results: int = 5):
     ]
     return results
 
-@tool
+@tool(args_schema=RequestUrlSchema)
 @async_time_logger("request_url_tool")
 async def request_url_tool(input_url: str) -> List[Dict[str, Any]]:
     """
@@ -582,7 +583,7 @@ async def request_url_tool(input_url: str) -> List[Dict[str, Any]]:
     except Exception as e:
         return [{"error": f"[처리 오류] {str(e)}"}]
 
-@tool
+@tool(args_schema=WikipediaSchema)
 @async_time_logger("wikipedia_tool")
 async def wikipedia_tool(query: str) -> List[Dict[str, Any]]:
     """
@@ -627,7 +628,7 @@ async def wikipedia_tool(query: str) -> List[Dict[str, Any]]:
             continue
 
 
-@tool
+@tool(args_schema=GoogleTrendsTimeseriesSchema)
 @async_time_logger("google_trends_timeseries_tool")
 async def google_trends_timeseries_tool(query: str, start_date: str = None, end_date: str = None) -> Dict[str, Union[str, List[float], List[str]]]:
     """
@@ -709,7 +710,7 @@ async def google_trends_timeseries_tool(query: str, start_date: str = None, end_
             return {"error": f"Rate limit exceeded for query '{query}'. Try again later."}
         return {"error": f"Error retrieving Google Trends data: {str(e)}"}
 
-@tool
+@tool(args_schema=GenerateNewsTrendReportSchema)
 @async_time_logger("generate_news_trend_report_tool")
 async def generate_news_trend_report_tool(
     date_start: str = None,
@@ -882,8 +883,28 @@ async def generate_news_trend_report_tool(
     except Exception as e:
         return [{"error": f"[GPT 또는 S3 처리 실패] {str(e)}"}]
 
+def get_font_path():
+    # 서버용 경로
+    ec2_font = "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc"
+    # Mac용 경로
+    mac_font = "/System/Library/Fonts/Supplemental/AppleGothic.ttf"  # 또는 NotoSans가 설치된 경로
+    # Windows용 경로 (예시)
+    win_font = "C:/Windows/Fonts/malgun.ttf"
+
+    if os.path.exists(ec2_font):
+        return ec2_font
+    elif os.path.exists(mac_font):
+        return mac_font
+    elif os.path.exists(win_font):
+        return win_font
+    else:
+        raise FileNotFoundError("지원하는 한글 폰트를 찾을 수 없습니다.")
+
+
 def generate_keyword_bar_chart(keywords, counts, date_start, date_end) -> str:
-    plt.rcParams['font.family'] = 'Noto Sans CJK KR'
+    font_path = get_font_path()
+    font_prop = fm.FontProperties(fname=font_path)
+    plt.rcParams['font.family'] = font_prop.get_name()
     plt.rcParams['axes.unicode_minus'] = False
 
     plt.figure(figsize=(8, 5))
@@ -963,54 +984,30 @@ def slugify(text: str) -> str:
     return ascii_text.strip('_')
 
 
-@tool
-@async_time_logger("news_trend_chart_tool")
-async def news_trend_chart_tool(
+@tool(args_schema=ITNewsTrendKeywordSchema)
+@async_time_logger("it_news_trend_keyword_tool")
+async def it_news_trend_keyword_tool(
     *,
     period: str,   # "daily" 또는 "weekly"
     date: str
 ) -> Dict[str, Any]:
-
     """
-    특정 날짜의 일간, 주간 메인 및 연관 트렌드를 조회하고,
-    메인 키워드 인기 차트 및 각 키워드별 연관 키워드 차트를 제공합니다.
-
-    When to use:
-        - 어제 또는 특정 주간의 트렌드를 조회할 때.
-        - 날짜 기준 IT 뉴스 트렌드를 분석할 때.
-        - 키워드 패턴, 인기 키워드, 연관 키워드, 기사 흐름을 파악하고 싶을 때.
+    IT 뉴스 키워드 트렌드와 관련 정보를 반환합니다 (상위 5개 키워드, 각 기사 3개씩).
 
     Args:
         period (str): "daily" 또는 "weekly"
         date (str): 기준 날짜 (YYYY-MM-DD)
 
     Returns:
-        Dict[str, Any]:
+        Dict:
             - date (str): 기준 날짜
-            - chart_url (str): 메인 키워드 막대 그래프 S3 URL
-            - chart_description (str): 메인 차트 설명
-            - keywords (List[Dict]):
-                - keyword (str): 키워드명
-                - frequency (int): 빈도수
-                - related_keywords (List[Dict]):
-                    - keyword (str)
-                    - frequency (int)
-                - related_chart_url (str | None): 연관 키워드 파이차트 S3 URL
-                - articles (List[Dict]):
-                    - title (str)
-                    - content (str)
-                    - date (str)
-                    - url (str)
-                    - media_company (str)
-
-    Notes:
-        chart_url과 chart_description은 메인 키워드 시각화 삽입용으로 사용됩니다.
-        keywords 내 related_chart_url은 각 키워드별 연관 키워드 시각화(파이 차트) 삽입용으로 활용됩니다.
+            - main_chart_url (str): 메인 키워드 빈도 막대 그래프 URL
+            - top_keywords (List[str]): 상위 10개 키워드 리스트
+            - keyword_frequencies (Dict[str, int]): 상위 키워드별 빈도수
+            - results (List[Dict]): 기사 리스트 (keyword, title, content, date, url, media_company)
     """
-
-    # Redis 캐시
     r = get_redis_client()
-    cache_key = f"{period}_trend_with_charts_list:{date}"
+    cache_key = f"{period}_trend:{date}:"
     if (cached := r.get(cache_key)):
         return json.loads(cached)
 
@@ -1023,7 +1020,7 @@ async def news_trend_chart_tool(
     elif period == "weekly":
         resp = requests.get(f"http://localhost:8080/api/insight/weekly?date={date}")
         records = resp.json().get("top_weekly_keywords", [])
-        chart_title = f"{date} 주간 메인 키워드 총빈도"
+        chart_title = f"{date} 주간 메인 키워드"
         key_prefix = f"weekly/{date}"
         date_end = date
         date_start = (datetime.fromisoformat(date) - timedelta(days=6)).strftime("%Y-%m-%d")
@@ -1033,17 +1030,22 @@ async def news_trend_chart_tool(
     if not records:
         return {
             "date": date,
-            "chart_url": None,
-            "chart_description": None,
-            "keywords": []
+            "main_chart_url": None,
+            "top_keywords": [],
+            "keyword_frequencies": {},
+            "articles": []
         }
 
+    # 상위 5개 키워드 선택
+    top_records = sorted(records, key=lambda x: x.get("frequency", 0) or x.get("totalFrequency", 0), reverse=True)[:10]
+
+    # 메인 키워드 차트 생성
     df_main = pd.DataFrame({
-        "keyword": [kw["keyword"] for kw in records],
-        "frequency": [kw.get("frequency") or kw.get("totalFrequency") for kw in records],
+        "keyword": [kw["keyword"] for kw in top_records],
+        "frequency": [kw.get("frequency") or kw.get("totalFrequency") for kw in top_records],
     })
     fig_main = px.bar(
-        df_main, x="frequency", y="keyword", orientation="h",
+        df_main, x="frequency", y="keyword",
         title=chart_title, height=400
     )
     fig_main.update_layout(
@@ -1052,60 +1054,57 @@ async def news_trend_chart_tool(
         font=dict(family="Noto Sans CJK KR")
     )
     key_main = f"{key_prefix}/main-bar.png"
-    chart_url = upload_chart_to_s3(fig_main, key_main)
+    main_chart_url = upload_chart_to_s3(fig_main, key_main)
 
-    # 기사 비동기 fetch
+    keyword_frequencies = {
+        kw["keyword"]: kw.get("frequency") or kw.get("totalFrequency")
+        for kw in top_records
+    }
+
+    # 기사 비동기 수집
     article_tasks = {
         kw["keyword"]: asyncio.create_task(fetch_domestic_articles(
             keyword=kw["keyword"],
             date_start=date_start,
             date_end=date_end
         ))
-        for kw in records
+        for kw in top_records
     }
 
-    keyword_list = []
-    for kw in records:
+    articles = []
+    url_set = set()  # URL 중복 방지용
+    for kw in top_records:
         keyword_name = kw["keyword"]
-        rels = kw.get("relatedKeywords", [])
+        task_result = await article_tasks[keyword_name]
+        count = 0
+        for article in task_result:
+            if article.get("url") in url_set:
+                continue  # 이미 추가한 기사면 스킵
+            articles.append({
+                "keyword": keyword_name,
+                "title": article["title"],
+                "content": article.get("content", "")[:200],
+                "date": article.get("date"),
+                "url": article.get("url"),
+                "media_company": article.get("media_company")
+            })
+            url_set.add(article.get("url"))
+            count += 1
+            if count >= 3:
+                break  # 각 키워드당 3개까지만
 
-        related_keywords = [
-            {"keyword": r["relatedKeyword"], "frequency": r["frequency"]}
-            for r in rels if r["frequency"] > 0
-        ]
-
-        df_pie = pd.DataFrame(related_keywords)
-        related_chart_url = None
-        if not df_pie.empty:
-            fig_pie = px.pie(
-                df_pie, names="keyword", values="frequency", hole=0.4,
-                title=f"{keyword_name} 연관 키워드 비율", height=350
-            )
-            fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-            pie_key = f"{key_prefix}/pie_{kw.get('id') or kw.get('keywordId')}.png"
-            related_chart_url = upload_chart_to_s3(fig_pie, pie_key)
-
-        articles = await article_tasks[keyword_name]
-        keyword_list.append({
-            "keyword": keyword_name,
-            "frequency": kw.get("frequency") or kw.get("totalFrequency"),
-            "related_keywords": related_keywords,
-            "related_chart_url": related_chart_url,
-            "articles": articles[:5]
-        })
-
-    final_result = {
+    result = {
         "date": date,
-        "chart_url": chart_url,
-        "chart_description": chart_title + " 막대 그래프",
-        "keywords": keyword_list
+        "main_chart_url": main_chart_url,
+        "keyword_frequencies": keyword_frequencies,
+        "results": articles
     }
 
-    r.set(cache_key, json.dumps(final_result, ensure_ascii=False))
-    return final_result
+    r.set(cache_key, json.dumps(result, ensure_ascii=False))
+    return result
 
 
-@tool
+@tool(args_schema=StockHistorySchema)
 @async_time_logger("stock_history_tool")
 async def stock_history_tool(
     symbol: str,
@@ -1233,7 +1232,7 @@ async def stock_history_tool(
         response["message"] = f"주식 데이터를 가져오는 데 실패했습니다: {str(e)}"
         return response
 
-@tool
+@tool(args_schema=KRStockHistorySchema)
 @async_time_logger("kr_stock_history_tool")
 async def kr_stock_history_tool(
     symbol: str,
@@ -1343,7 +1342,7 @@ async def kr_stock_history_tool(
         response["message"] = f"주식 데이터를 가져오는 데 실패했습니다: {str(e)}"
         return response
 
-@tool
+@tool(args_schema=NamuwikiSchema)
 @async_time_logger("namuwiki_tool")
 async def namuwiki_tool(keyword: str) -> List[Dict[str, Any]]:
     """
@@ -1407,7 +1406,7 @@ async def namuwiki_tool(keyword: str) -> List[Dict[str, Any]]:
     except Exception as e:
         return [{"error": f"[오류 발생] 나무위키 요청 실패: {str(e)}"}]
 
-@tool
+@tool(args_schema=Dalle3ImageGenerationSchema)
 @async_time_logger("dalle3_image_generation_tool")
 async def dalle3_image_generation_tool(prompt: str) -> List[Dict[str, Any]]:
     """
@@ -1461,7 +1460,7 @@ async def dalle3_image_generation_tool(prompt: str) -> List[Dict[str, Any]]:
         print(f"DALL·E 생성 오류: {str(e)}")
         return [{"error": f"이미지 생성 실패: {str(e)}"}]
 
-@tool
+@tool(args_schema=WikipediaSchema)
 @async_time_logger("weather_tool")
 async def weather_tool(
     location: str = "Seoul,KR",
@@ -1631,6 +1630,108 @@ async def weather_tool(
         logger.error(f"예상치 못한 오류: {str(e)}")
         return {"error": f"오류 발생: {str(e)}"}
 
+
+@tool(args_schema=PaperSearchSchema)
+@async_time_logger("paper_search_tool")
+async def paper_search_tool(
+        query: str,
+        max_results: int = 5,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        sort_by: str = "relevance"
+) -> Dict[str, Any]:
+    """
+    ArXiv API를 사용해 학술 논문을 검색합니다.
+
+    When to use:
+        - 특정 주제의 최신 또는 인기 있는 학술 논문을 탐색할 때.
+        - 키워드 기반으로 논문 제목, 초록, URL 등을 얻고 싶을 때.
+
+    Args:
+        query (str): 검색 키워드
+        max_results (int): 반환할 최대 논문 수 (기본 5, 최대 10)
+        start_date (str, optional): 검색 시작 날짜 (YYYY-MM-DD)
+        end_date (str, optional): 검색 종료 날짜 (YYYY-MM-DD)
+        sort_by (str): 정렬 기준 ('date' 또는 'relevance')
+
+    Returns:
+        Dict[str, Any]:
+            - query (str): 검색 키워드
+            - results (List[Dict]):
+                - title (str): 논문 제목
+                - abstract (str): 초록
+                - published_date (str): 출판 날짜 (YYYY-MM-DD)
+                - url (str): 논문 URL
+                - authors (List[str]): 저자 목록
+            - error (str, optional): 오류 메시지
+    """
+    # 캐시 키 생성
+    cache_key = f"paper:arxiv:{query}:{max_results}:{start_date or ''}:{end_date or ''}:{sort_by}"
+    r = get_redis_client()
+    if cached := r.get(cache_key):
+        return json.loads(cached)
+
+    # 정렬 기준 설정
+    if sort_by == "relevance":
+        sort_criterion = arxiv.SortCriterion.Relevance
+    elif sort_by == "date":
+        sort_criterion = arxiv.SortCriterion.SubmittedDate
+    else:
+        return {"error": "sort_by는 'date' 또는 'relevance'이어야 합니다."}
+
+    # ArXiv 검색 클라이언트 초기화
+    client = arxiv.Client()
+
+    try:
+        # 검색 쿼리 구성
+        search_query = query
+        search = arxiv.Search(
+            query=search_query,
+            max_results=max_results,
+            sort_by=sort_criterion,
+            sort_order=arxiv.SortOrder.Descending
+        )
+
+        # 결과 수집
+        results = []
+        for paper in client.results(search):
+            published_date = paper.published.strftime("%Y-%m-%d")
+
+            # 날짜 필터링
+            if start_date and published_date < start_date:
+                continue
+            if end_date and published_date > end_date:
+                continue
+
+            results.append({
+                "title": paper.title,
+                "abstract": paper.summary.strip()[:1000],
+                "published_date": published_date,
+                "url": paper.entry_id,
+                "authors": [author.name for author in paper.authors]
+            })
+
+        # 결과가 없거나 필터링 후 비어 있는 경우
+        if not results:
+            result = {
+                "query": query,
+                "results": [],
+                "message": "검색된 논문이 없습니다."
+            }
+        else:
+            result = {
+                "query": query,
+                "results": results[:max_results]
+            }
+
+        # 캐시에 저장 (7일 TTL)
+        r.setex(cache_key, timedelta(days=7), json.dumps(result, ensure_ascii=False))
+        return result
+
+    except Exception as e:
+        logger.error(f"ArXiv 검색 실패: {str(e)}")
+        return {"error": f"논문 검색 실패: {str(e)}"}
+
 tools = [
     domestic_it_news_search_tool,
     foreign_news_search_tool,
@@ -1641,10 +1742,11 @@ tools = [
     wikipedia_tool,
     google_trends_timeseries_tool,
     generate_news_trend_report_tool,
-    news_trend_chart_tool,
+    it_news_trend_keyword_tool,
     namuwiki_tool,
     stock_history_tool,
     dalle3_image_generation_tool,
     kr_stock_history_tool,
-    weather_tool
+    weather_tool,
+    paper_search_tool
 ]
