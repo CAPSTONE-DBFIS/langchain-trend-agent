@@ -21,10 +21,10 @@ async def agent_query(
     chat_room_id: int = Form(...),
     member_id: str = Form(...),
     persona_id: int = Form(None),
-    model_type: str = Form("claude"),
+    model_type: str = Form("gpt-4o-mini"),
     files: List[UploadFile] = File(None)
 ):
-
+    print(model_type)
     file_statuses = None
 
     if files:
