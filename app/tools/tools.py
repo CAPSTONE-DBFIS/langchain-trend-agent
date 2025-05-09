@@ -438,8 +438,8 @@ async def search_reddit_posts(keyword: str, max_result: int = 10) -> List[Dict[s
         raise RuntimeError(f"Reddit search error: {str(e)}")
 
 @tool(args_schema=SearchWebSchema)
-@async_time_logger("search_web_tool")
-async def search_web_tool(keyword: str, max_results: int=10) -> List[Dict[str, str]]:
+@async_time_logger("web_search_tool")
+async def web_search_tool(keyword: str, max_results: int=10) -> List[Dict[str, str]]:
     """
     Real-time Web Page Search Tool using Tavily API
 
@@ -670,12 +670,12 @@ async def google_trends_tool(query: str, start_date: str = None, end_date: str =
 
         fig = px.line(
             df_trend, x="date", y="interest",
-            title=f"Google Trends Interest Trend: {query}",
+            title=f"Google 트렌드 관심도 추이: {query}",
             markers=True
         )
         fig.update_layout(
-            xaxis_title="Date",
-            yaxis_title="Interest",
+            xaxis_title="날짜",
+            yaxis_title="관심도",
             height=400,
             font=dict(family="Noto Sans CJK KR")
         )
@@ -825,21 +825,22 @@ async def generate_news_trend_report_tool(
 
     # 3. GPT 보고서 생성
     prompt = PromptTemplate.from_template("""
-    You are an expert AI specializing in writing corporate research reports.
+    당신은 기업 리서치 보고서를 전문적으로 작성하는 AI입니다.
 
-    Based on the keyword frequency and related news articles below,
-    write a formal report following the [Overview - Main Body - Conclusion] structure.
+    아래에 제공된 키워드 빈도 정보와 관련 뉴스 기사 내용을 기반으로,
+    [개요 - 본문 - 결론] 구조에 따라 형식을 갖춘 공식 보고서를 작성하세요.
 
-    Write in plain paragraph format without markdown or symbols.
-    Label each section with 'Overview', 'Main Body', and 'Conclusion' headings.
-    In the Main Body, mention keyword frequencies and summarize the articles, focusing on the overall trends and patterns.
+    보고서는 마크다운이나 특수 기호 없이 일반 문단 형식으로 작성합니다.
+    각 섹션은 '개요', '본문', '결론' 제목으로 구분해 주세요.
 
-    {date_start} to {date_end} IT Keyword Trends:
+    특히 본문에서는 키워드 빈도를 언급하고, 뉴스 기사들을 요약하며 전반적인 트렌드와 패턴에 중점을 둡니다.
 
-    [Keyword Summary]
+    {date_start}부터 {date_end}까지의 IT 키워드 트렌드:
+
+    [키워드 요약]
     {keywords}
 
-    [Related News Articles]
+    [관련 뉴스 기사]
     {articles}
     """)
 
@@ -894,9 +895,9 @@ def generate_keyword_bar_chart(keywords, counts, date_start, date_end) -> str:
 
     plt.figure(figsize=(8, 5))
     bars = plt.bar(keywords, counts, color='skyblue')
-    plt.title(f"{date_start}~{date_end} Naver News Keyword Frequency", fontsize=14)
-    plt.xlabel("Keyword")
-    plt.ylabel("Frequency")
+    plt.title(f"{date_start}~{date_end} 네이버 뉴스 키워드 빈도", fontsize=14)
+    plt.xlabel("키워드")
+    plt.ylabel("출현 빈도")
 
     for bar in bars:
         yval = bar.get_height()
@@ -1030,7 +1031,8 @@ async def it_news_trend_keyword_tool(
     })
     fig_main = px.bar(
         df_main, x="frequency", y="keyword",
-        title=chart_title, height=400
+        title="주요 키워드 빈도", height=400,
+        labels={"frequency": "출현 빈도", "keyword": "키워드"}
     )
     fig_main.update_layout(
         margin=dict(l=120, r=20, t=50, b=20),
@@ -1188,10 +1190,10 @@ async def stock_history_tool(
         ))
 
         fig.update_layout(
-            title=f"{symbol} Stock Price and Volume",
-            xaxis=dict(title="Date"),
-            yaxis=dict(title="Close Price", tickprefix="$"),
-            yaxis2=dict(title="Volume", overlaying="y", side="right"),
+            title=f"{symbol} 주가 및 거래량",
+            xaxis=dict(title="날짜"),
+            yaxis=dict(title="종가 (원)"),
+            yaxis2=dict(title="거래량", overlaying="y", side="right"),
             height=400,
             font=dict(family="Noto Sans CJK KR")
         )
@@ -1293,10 +1295,10 @@ async def kr_stock_history_tool(
         ))
 
         fig.update_layout(
-            title=f"{symbol} Stock Price and Volume",
-            xaxis=dict(title="Date"),
-            yaxis=dict(title="Close Price"),
-            yaxis2=dict(title="Volume", overlaying="y", side="right"),
+            title=f"{symbol} 주가 및 거래량",
+            xaxis=dict(title="날짜"),
+            yaxis=dict(title="종가 (원)"),
+            yaxis2=dict(title="거래량", overlaying="y", side="right"),
             height=400,
             font=dict(family="Noto Sans CJK KR")
         )
@@ -1704,7 +1706,7 @@ tools = [
     domestic_it_news_search_tool,
     foreign_news_search_tool,
     community_search_tool,
-    search_web_tool,
+    web_search_tool,
     youtube_video_tool,
     request_url_tool,
     wikipedia_tool,
