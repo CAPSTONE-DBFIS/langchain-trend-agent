@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import os
 from typing import List, Any, Dict
 from fastapi.responses import StreamingResponse
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain.memory import ConversationBufferWindowMemory
 from langchain_core.prompts import ChatPromptTemplate
@@ -32,9 +32,9 @@ class AgentChatService:
     async def summarize_query_to_title(query: str) -> str:
         """채팅방의 첫 질문에 대해 한문장 요약을 생성하는 함수"""
         prompt = PromptTemplate.from_template("""
-            다음은 사용자의 첫 번째 질문입니다. 질문의 주제를 대표하는 간결한 명사 형태의 채팅방 이름을 생성하세요.  
-            예를 들어 "토익 공부 어떻게 시작하나요?" → "토익 공부"  
-            "학점 관리 방법 알려줘" → "학점 관리"
+            다음은 사용자의 질문입니다. 질문의 주제를 대표하는 간결한 명사 형태의 채팅방 이름을 생성하세요.  
+            예를 들어 "엔비디아 트렌드 알려줘" → "엔비디아 트렌드 질문"  
+            "엔비디아 주가 분석해줘" → "엔비디아 주가 분석"
 
             주의:
             - 따옴표는 붙이지 마세요.
@@ -52,7 +52,7 @@ class AgentChatService:
         "domestic_it_news_search_tool",
         "foreign_news_search_tool",
         "community_search_tool",
-        "search_web_tool",
+        "web_search_tool",
         "youtube_video_tool",
         "request_url_tool",
         "it_news_trend_keyword_tool",
@@ -63,7 +63,7 @@ class AgentChatService:
         "domestic_it_news_search_tool": "국내 뉴스 검색 중...",
         "foreign_news_search_tool": "해외 뉴스 검색 중...",
         "community_search_tool": "커뮤니티 게시물 검색 중...",
-        "search_web_tool": "웹 검색 중...",
+        "web_search_tool": "웹 검색 중...",
         "youtube_video_tool": "YouTube 정보 검색 중...",
         "request_url_tool": "웹페이지 분석 중...",
         "it_news_trend_keyword_tool": "국내 뉴스 트렌드 키워드 분석 중...",
@@ -83,10 +83,10 @@ class AgentChatService:
         "it_news_trend_keyword_tool": "results",
         "community_search_tool": "results",
         "domestic_it_news_search_tool": "results",
+        "web_search_tool": "results",
+        "paper_search_tool": "results",
         "youtube_video_tool": None,
-        "search_web_tool": "results",
-        "request_url_tool": None,
-        "paper_search_tool": "results"
+        "request_url_tool": None
     }
 
     @staticmethod
@@ -99,12 +99,14 @@ class AgentChatService:
         model_type: str = "gpt-4o-mini"
     ) -> StreamingResponse:
         print(model_type)
+
         # LLM 초기화
         if model_type.lower() == "claude-3-5-haiku-20241022" or model_type.lower() == "claude-3-5-sonnet-20241022":
             llm = ChatAnthropic(
                 model=rf"{model_type.lower()}",
                 temperature=0,
                 streaming=True,
+                max_tokens=4096
             ).bind_tools(tools=tools, tool_choice="any")
 
         elif model_type.lower() == "gpt-4o-mini" or model_type.lower() == "gpt-4.1-mini" :
@@ -112,24 +114,42 @@ class AgentChatService:
             llm = ChatOpenAI(
                 model= rf"{model_type.lower()}",
                 temperature=0,
-                streaming=True
+                streaming=True,
+                max_tokens=4096
             ).bind_tools(tools=tools, tool_choice="any")
 
-        elif model_type.lower() == "gemini-2.0-flash":
-            llm = ChatGoogleGenerativeAI(
-                model="gemini-2.0-flash",
-                temperature=0,
-                streaming=True
+        elif model_type.lower() == "gemini-2.5-flash-preview":
+            llm = ChatOpenAI(
+                openai_api_key=os.getenv("OPENROUTER_API_KEY"),
+                openai_api_base="https://openrouter.ai/api/v1",
+                model_name="google/gemini-2.5-flash-preview",
+                max_tokens=4096
+            ).bind_tools(tools=tools, tool_choice="any")
+
+        elif model_type.lower() == "grok-3-mini-beta":
+            llm = ChatOpenAI(
+                openai_api_key=os.getenv("OPENROUTER_API_KEY"),
+                openai_api_base="https://openrouter.ai/api/v1",
+                model_name="x-ai/grok-3-mini-beta",
+                max_tokens=4096
+            ).bind_tools(tools=tools, tool_choice="any")
+
+        elif model_type.lower() == "mistral-medium-3":
+            llm = ChatOpenAI(
+                openai_api_key=os.getenv("OPENROUTER_API_KEY"),
+                openai_api_base="https://openrouter.ai/api/v1",
+                model_name="mistralai/mistral-medium-3",
+                max_tokens=4096
             ).bind_tools(tools=tools, tool_choice="any")
         else:
             raise ValueError(f"지원하지 않는 모델 타입입니다: {model_type}")
 
         # 메모리 초기화
         memory = ConversationBufferWindowMemory(
-            k=6,  # 최근 6개의 human+ai message 쌍 유지
+            k=10,  # 최근 10개의 human+ai message 쌍 유지
             return_messages=True,
             memory_key="chat_history",
-            output_key="messages"
+            output_key="output"
         )
 
         # 과거 대화 불러오기
@@ -166,10 +186,10 @@ class AgentChatService:
         system_prompt = rf"""
         <Goal>
         You are TRENDB, an advanced AI agent specialized in researching, analyzing, and summarizing the latest trend information.
-
         Your mission is to invoke appropriate "tools" according to the user's query and deliver accurate, detailed, and comprehensive answers **based solely on the tool output**.
         Do not repeat information from previous answers. You must develop your own response strategy and compose a completely independent answer using tools. 
         Your answers must be accurate, high-quality, and written in an expert, unbiased journalistic tone.
+        All answers **must be written in fluent and natural Korean** appropriate for professional media, regardless of the input language.
         </Goal>
 
         <Role & Persona>
@@ -181,7 +201,7 @@ class AgentChatService:
         <Tool Usage Rules>
         - Understand the query type and intent.
         - For complex queries, decompose into sub-tasks and select 1 to 3 appropriate tools.
-        - Always prioritize using the search_web_tool to gather relevant data.
+        - Always prioritize using the web_search_tool to gather relevant data.
         - Search keywords must reflect the core of the question. (e.g., "NVIDIA trends" → "nvidia")
         - Evaluate the usefulness of the tool output and synthesize the best possible answer.
         - Your answer **must be based on tool output**. Do not generate unsupported claims.
@@ -193,16 +213,20 @@ class AgentChatService:
         <Tool Usage Example>
         Example 1:
         User Query: "AI 트렌드 알려줘"
-        Tool Calls: search_web_tool, foreign_news_search_tool, google_trends_timeseries_tool
+        Tool Calls: web_search_tool,  it_news_trend_keyword_tool, foreign_news_search_tool
         
         Example 2:
         User Query: "어제 트렌드 알려줘"
-        Tool Calls: search_web_tool, it_news_trend_keyword_tool
-        **Remember:** Always choose 1 to 3 tools relevant to the query. If search_web_tool is applicable, always use it.
+        Tool Calls: web_search_tool, it_news_trend_keyword_tool
+        
+        Example 3:
+        User Query: "어제 트렌드 보고서 작성해줘"
+        Tool Calls: generate_news_trend_report_tool
+        **Remember:** Always choose 1 to 3 tools relevant to the query. If web_search_tool is applicable, always use it.
         </Tool Usage Example>
         
         <Output Format Rules>
-        - **All final answers must be written in fluent Korean.
+        - Your answer must be written in fluent Korean.
         - Start the answer with a few sentences summarizing the entire answer. Never start with a header (##). Do not mention the tool names in the opening.
         - Use ## headers for section titles. Use bold (**text**) for emphasis if needed. Use single line breaks between list items and double breaks between paragraphs.
         - Lists: No nested lists. Use markdown tables for comparisons. Use unordered lists unless an ordered list makes sense.
@@ -213,7 +237,6 @@ class AgentChatService:
         - Images: Use ![이미지](url) format for image citations.
         - Always insert a line break after the end of a sentence.
         - Suggestions: Offer follow-up suggestions based on the available tools.
-
         </Output Format Rules>
 
         <Response Example>
@@ -253,7 +276,7 @@ class AgentChatService:
         - If you produce any part of the answer from internal knowledge, DO NOT add citations to those parts.
         - Prefer stating that "no relevant information was found" over using undocumented knowledge.
         </Knowledge Usage Rules>
-
+        
         <Mandatory>
         - You must invoke at least one tool.
         - All citations must follow the format ([1](www.) [2](www.)).
@@ -265,28 +288,12 @@ class AgentChatService:
         <Current Date> {current_datetime} </Current Date>
         """
 
-        if model_type == "claude-3-5-sonnet-20241022" or "claude-3-5-haiku-20241022":
-            prompt = ChatPromptTemplate.from_messages([
-                SystemMessage(system_prompt),
-                MessagesPlaceholder("chat_history"),
-                ("user", "{input}"),
-                MessagesPlaceholder("agent_scratchpad")
-            ])
-
-        elif model_type == "gpt-4o-mini" or "gpt-4o" :
-            prompt = ChatPromptTemplate.from_messages([
-                SystemMessage(system_prompt),
-                MessagesPlaceholder("chat_history"),
-                ("user", "{input}"),
-                MessagesPlaceholder("agent_scratchpad")
-            ])
-        else :
-            prompt = ChatPromptTemplate.from_messages([
-                SystemMessage(system_prompt),
-                MessagesPlaceholder("chat_history"),
-                ("user", "{input}"),
-                MessagesPlaceholder("agent_scratchpad")
-            ])
+        prompt = ChatPromptTemplate.from_messages([
+            SystemMessage(system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("user", "{input}"),
+            MessagesPlaceholder("agent_scratchpad")
+        ])
 
         # 에이전트 & 콜백
         agent = create_tool_calling_agent(llm, tools, prompt)
