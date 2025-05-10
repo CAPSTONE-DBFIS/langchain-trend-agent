@@ -189,3 +189,5 @@ __pycache__/
 *.pycdata/raw/article_data.csv
 data/raw/article_data.csv
 *.csv
+/data/raw
+/scripts/sentiment/my_finetuned_bert1
