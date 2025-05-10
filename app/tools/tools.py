@@ -473,9 +473,7 @@ async def global_it_news_trend_report_tool(date_start=None, date_end=None):
             ]
         elif system == "Linux":
             candidates = [
-                "/usr/share/fonts/noto/NotoSansCJKkr-Regular.otf",
-                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
+                "/usr/share/fonts/noto/NotoSansCJKkr-Regular.otf"
             ]
         elif system == "Windows":
             candidates = [
@@ -492,10 +490,15 @@ async def global_it_news_trend_report_tool(date_start=None, date_end=None):
                 break
 
         if font_path:
+            fm.fontManager.addfont(font_path)
             font_prop = fm.FontProperties(fname=font_path)
-            plt.rcParams['font.family'] = font_prop.get_name()
+            font_name = font_prop.get_name()
+            plt.rcParams['font.family'] = font_name
+            print(f"[DEBUG] 적용된 폰트: {font_name} @ {font_path}")
         else:
             plt.rcParams['font.family'] = 'Arial'
+            print("[DEBUG] 폰트 파일 없음, Arial 사용됨")
+
         plt.rcParams['axes.unicode_minus'] = False
 
         plt.figure(figsize=(8, 5))
@@ -503,7 +506,7 @@ async def global_it_news_trend_report_tool(date_start=None, date_end=None):
         plt.title(f"{date_start} ~ {date_end} {title_prefix} 키워드 빈도")
         for bar in bars:
             yval = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2, yval + 0.2, int(yval), ha='center')
+            plt.text(bar.get_x() + bar.get_width() / 2, yval + 0.2, int(yval), ha='center')
         base_dir = os.path.abspath("./data/reports")
         os.makedirs(base_dir, exist_ok=True)
         filename = f"{title_prefix}_keywords_{date_start}_{date_end}_{uuid4().hex[:6]}.png"
