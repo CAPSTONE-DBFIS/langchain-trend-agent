@@ -37,7 +37,7 @@ class GoogleTrendsSchema(BaseModel):
     start_date: Optional[str] = Field(None, description="Start date (YYYY-MM-DD), defaults to last month")
     end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
 
-class GenerateNewsTrendReportSchema(BaseModel):
+class GlobalITNewsTrendReportSchema(BaseModel):
     date_start: Optional[str] = Field(None, description="Start date (YYYY-MM-DD), defaults to yesterday")
     date_end: Optional[str] = Field(None, description="End date (YYYY-MM-DD), defaults to yesterday")
 
@@ -52,24 +52,9 @@ class StockHistorySchema(BaseModel):
     symbol: str = Field(..., description="Ticker symbol")
     start: str = Field(..., description="Start date (YYYY-MM-DD)")
     end: str = Field(..., description="End date (YYYY-MM-DD)")
-    auto_adjust: bool = Field(True, description="Whether to adjust for dividends and splits")
-    back_adjust: bool = Field(False, description="Whether to apply back adjustment")
 
 class Dalle3ImageGenerationSchema(BaseModel):
     prompt: str = Field(..., description="Prompt for image generation")
-
-class KRStockHistorySchema(BaseModel):
-    symbol: str = Field(..., description="6-digit stock code")
-    start: str = Field(..., description="Start date (YYYY-MM-DD)")
-    end: str = Field(..., description="End date (YYYY-MM-DD)")
-
-class WeatherSchema(BaseModel):
-    location: str = Field("Seoul,KR", description="City name and country code (e.g., 'Seoul,KR')")
-    lang: str = Field("kr", description="Language code, defaults to 'kr'")
-    units: str = Field("metric", description="Units, defaults to 'metric'")
-    forecast_types: str = Field("current,hourly,daily", description="Combination of 'current', 'hourly', 'daily'")
-    include_extras: bool = Field(True, description="Whether to include extra information")
-    today_only: bool = Field(False, description="Whether to return only today's data")
 
 class PaperSearchSchema(BaseModel):
     query: str = Field(..., description="English keyword for paper search")

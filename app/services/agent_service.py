@@ -67,12 +67,11 @@ class AgentChatService:
         "youtube_video_tool": "YouTube 정보 검색 중...",
         "request_url_tool": "웹페이지 분석 중...",
         "it_news_trend_keyword_tool": "국내 뉴스 트렌드 키워드 분석 중...",
-        "google_trends_timeseries_tool": "구글 트렌드 분석 중...",
+        "google_trends_tool": "구글 트렌드 분석 중...",
         "wikipedia_tool": "위키피디아 검색 중...",
         "namuwiki_tool": "나무위키 검색 중...",
-        "stock_history_tool": "글로벌 주식 데이터 조회 중...",
-        "kr_stock_history_tool": "한국 주식 데이터 조회 중...",
-        "generate_news_trend_report_tool": "뉴스 트렌드 보고서 생성 중...",
+        "stock_history_tool": "주식 데이터 조회 중...",
+        "global_it_news_trend_report_tool": "글로벌 뉴스 트렌드 보고서 생성 중...",
         "paper_search_tool": "논문 검색 중...",
         "dalle3_image_generation_tool": "이미지 생성 중 ..."
     }
@@ -80,7 +79,7 @@ class AgentChatService:
     # 도구별 출력 키 매핑
     TOOL_DATA_KEYS = {
         "foreign_news_search_tool": "results",
-        "it_news_trend_keyword_tool": "results",
+        "it_news_trend_keyword_tool": "keywords",
         "community_search_tool": "results",
         "domestic_it_news_search_tool": "results",
         "web_search_tool": "results",
@@ -101,7 +100,7 @@ class AgentChatService:
         print(model_type)
 
         # LLM 초기화
-        if model_type.lower() == "claude-3-5-haiku-20241022" or model_type.lower() == "claude-3-5-sonnet-20241022":
+        if model_type.lower() == "claude-3-7-sonnet-20250219":
             llm = ChatAnthropic(
                 model=rf"{model_type.lower()}",
                 temperature=0,
@@ -109,7 +108,7 @@ class AgentChatService:
                 max_tokens=4096
             ).bind_tools(tools=tools, tool_choice="any")
 
-        elif model_type.lower() == "gpt-4o-mini" or model_type.lower() == "gpt-4.1-mini" :
+        elif model_type.lower() == "gpt-4.1" or model_type.lower() == "gpt-4o-mini" :
             print(rf"{model_type.lower()}")
             llm = ChatOpenAI(
                 model= rf"{model_type.lower()}",
@@ -118,19 +117,19 @@ class AgentChatService:
                 max_tokens=4096
             ).bind_tools(tools=tools, tool_choice="any")
 
-        elif model_type.lower() == "gemini-2.5-flash-preview":
+        elif model_type.lower() == "gemini-2.5-pro-preview":
             llm = ChatOpenAI(
                 openai_api_key=os.getenv("OPENROUTER_API_KEY"),
                 openai_api_base="https://openrouter.ai/api/v1",
-                model_name="google/gemini-2.5-flash-preview",
+                model_name="google/gemini-2.5-pro-preview",
                 max_tokens=4096
             ).bind_tools(tools=tools, tool_choice="any")
 
-        elif model_type.lower() == "grok-3-mini-beta":
+        elif model_type.lower() == "grok-3-beta":
             llm = ChatOpenAI(
                 openai_api_key=os.getenv("OPENROUTER_API_KEY"),
                 openai_api_base="https://openrouter.ai/api/v1",
-                model_name="x-ai/grok-3-mini-beta",
+                model_name="x-ai/grok-3-beta",
                 max_tokens=4096
             ).bind_tools(tools=tools, tool_choice="any")
 
@@ -213,7 +212,7 @@ class AgentChatService:
         <Tool Usage Example>
         Example 1:
         User Query: "AI 트렌드 알려줘"
-        Tool Calls: web_search_tool,  it_news_trend_keyword_tool, foreign_news_search_tool
+        Tool Calls: web_search_tool, domestic_it_news_search_tool, foreign_news_search_tool
         
         Example 2:
         User Query: "어제 트렌드 알려줘"
@@ -221,7 +220,7 @@ class AgentChatService:
         
         Example 3:
         User Query: "어제 트렌드 보고서 작성해줘"
-        Tool Calls: generate_news_trend_report_tool
+        Tool Calls: global_it_news_trend_report_tool
         **Remember:** Always choose 1 to 3 tools relevant to the query. If web_search_tool is applicable, always use it.
         </Tool Usage Example>
         
@@ -394,55 +393,82 @@ class AgentChatService:
 
         def extract_item(item: Any, default_title: str = "정보 요약") -> Dict[str, Any]:
             result = {"title": default_title, "content": "", "url": ""}
-
             if isinstance(item, dict):
                 result["title"] = (item.get("title") or item.get("name") or default_title)[:200]
-                result["content"] = (item.get("content") or item.get("description") or item.get("abstract") or item.get("snippet") or "")[:500]
-                result["url"] = (item.get("url") or item.get("videoUrl") or item.get("link") or item.get(
-                    "chart_url") or item.get("main_chart_url") or "")
+                result["content"] = (
+                                            item.get("content") or item.get("description") or item.get(
+                                        "abstract") or item.get("snippet") or ""
+                                    )[:500]
+                result["url"] = (
+                        item.get("url") or item.get("videoUrl") or item.get("link") or
+                        item.get("chart_url") or item.get("main_chart_url") or ""
+                )
             elif isinstance(item, str) and item.strip():
                 result["content"] = item.strip()[:500]
             return result
 
         results = []
+        key = AgentChatService.TOOL_DATA_KEYS.get(tool_name)
 
-        # 도구별 출력 키 처리
-        if tool_name in AgentChatService.TOOL_DATA_KEYS:
-            key = AgentChatService.TOOL_DATA_KEYS[tool_name]
-            if key is None and isinstance(obs_raw, list):
-                # 리스트를 직접 반환하는 도구
-                for item in obs_raw:
-                    extracted = extract_item(item)
-                    if extracted["content"] or extracted["url"]:
-                        results.append(extracted)
-            elif key in obs_raw and isinstance(obs_raw[key], list):
-                for item in obs_raw[key]:
-                    extracted = extract_item(item)
-                    if extracted["content"] or extracted["url"]:
-                        results.append(extracted)
-        # 일반 리스트 처리
-        elif isinstance(obs_raw, list):
-            for it in obs_raw:
-                extracted = extract_item(it)
+        # it_news_trend_keyword_tool의 경우 keywords[].articles[] 처리
+        if tool_name == "it_news_trend_keyword_tool" and isinstance(obs_raw, dict) and "keywords" in obs_raw:
+            # main_chart_url 처리
+            if obs_raw.get("main_chart_url"):
+                results.append({
+                    "title": "키워드 빈도 차트",
+                    "content": obs_raw.get("chart_description", "주요 키워드 빈도 차트"),
+                    "url": obs_raw["main_chart_url"]
+                })
+            # articles 처리
+            for keyword_item in obs_raw["keywords"]:
+                if "articles" in keyword_item:
+                    for article in keyword_item["articles"]:
+                        extracted = extract_item(article, default_title=article.get("title", "기사 요약"))
+                        if extracted["content"] or extracted["url"]:
+                            results.append(extracted)
+            return results
+
+        # 기존 로직 유지
+        if isinstance(key, list):
+            for k in key:
+                if isinstance(obs_raw, dict) and k in obs_raw and isinstance(obs_raw[k], list):
+                    for item in obs_raw[k]:
+                        extracted = extract_item(item)
+                        if extracted["content"] or extracted["url"]:
+                            results.append(extracted)
+        elif isinstance(key, str) and isinstance(obs_raw, dict) and key in obs_raw and isinstance(obs_raw[key], list):
+            for item in obs_raw[key]:
+                extracted = extract_item(item)
                 if extracted["content"] or extracted["url"]:
                     results.append(extracted)
-        # 딕셔너리 처리 (공통 키 확인)
+        elif key is None and isinstance(obs_raw, list):
+            for item in obs_raw:
+                extracted = extract_item(item)
+                if extracted["content"] or extracted["url"]:
+                    results.append(extracted)
+        elif isinstance(obs_raw, list):
+            for item in obs_raw:
+                extracted = extract_item(item)
+                if extracted["content"] or extracted["url"]:
+                    results.append(extracted)
         elif isinstance(obs_raw, dict):
-            for key in ["results", "items", "articles", "posts"]:
-                if key in obs_raw and isinstance(obs_raw[key], list):
-                    for it in obs_raw[key]:
-                        extracted = extract_item(it)
+            for default_key in ["results", "items", "articles", "posts"]:
+                if default_key in obs_raw and isinstance(obs_raw[default_key], list):
+                    for item in obs_raw[default_key]:
+                        extracted = extract_item(item)
                         if extracted["content"] or extracted["url"]:
                             results.append(extracted)
                     break
             else:
-                # 전체 obs_raw를 단일 항목으로 처리
                 extracted = extract_item(obs_raw)
                 if extracted["content"] or extracted["url"]:
                     results.append(extracted)
-        # 문자열 처리
         elif isinstance(obs_raw, str) and obs_raw.strip():
-            results.append({"title": "정보 요약", "content": obs_raw.strip()[:500], "url": ""})
+            results.append({
+                "title": "정보 요약",
+                "content": obs_raw.strip()[:500],
+                "url": ""
+            })
 
         return results
 

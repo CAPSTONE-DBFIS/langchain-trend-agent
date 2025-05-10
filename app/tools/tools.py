@@ -5,17 +5,17 @@ import logging
 import os
 import re
 import time
+import platform
 from datetime import datetime, timedelta, timezone
 from functools import wraps
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, List, Union
 from urllib.parse import quote
 from uuid import uuid4
 
+from matplotlib import font_manager as fm
 import aiohttp
 import FinanceDataReader as fdr
-import boto3
 import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
 import openai
 import pandas as pd
 import plotly.express as px
@@ -47,8 +47,8 @@ import arxiv
 
 from app.utils.db_util import get_db_connection
 from app.utils.redis_util import get_redis_client
-from app.utils.s3_util import upload_chart_to_s3
-from app.utils.es_util import fetch_domestic_articles, get_es_client
+from app.utils.s3_util import upload_chart_to_s3, get_s3_client_and_bucket
+from app.utils.es_util import fetch_domestic_articles, fetch_foreign_articles, fetch_sentiment_distribution
 from app.tools.tools_schema import *
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ async def domestic_it_news_search_tool(
     date_end: str | None = None
 ) -> Dict[str, Any]:
     """
-    Elasticsearch IT News Search Tool
+    Domestic IT News Search Tool
 
     When to use:
         - When precise keyword-based search for domestic IT news is needed.
@@ -182,13 +182,14 @@ async def domestic_it_news_search_tool(
     except Exception as e:
         return {"error": f"Elasticsearch search failed: {str(e)}"}
 
+
 @tool(args_schema=ForeignNewsSearchSchema)
 @async_time_logger("foreign_news_search_tool")
 async def foreign_news_search_tool(
     en_keyword: str, lang: str = "en", country: str = "us", max_results: int = 10
 ) -> Dict[str, Any]:
     """
-    GNews API Foreign News Search Tool
+    Foreign News Search Tool Using GNEWS API
 
     When to use:
         - When searching for foreign news articles.
@@ -258,362 +259,362 @@ async def foreign_news_search_tool(
     except Exception as e:
         return {"error": f"GNews search failed: {str(e)}"}
 
-@async_time_logger("search_daum_blogs")
-async def search_daum_blogs(keyword: str, max_results: int = 10) -> List[Dict[str, str]]:
+
+@tool(args_schema=ITNewsTrendKeywordSchema)
+@async_time_logger("it_news_trend_keyword_tool")
+async def it_news_trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any]:
     """
-    Daum Blog Post Search Function
-
-    Args:
-        keyword (str): Search keyword
-        max_results (int): Maximum number of results
-
-    Returns:
-        List[Dict[str, str]]: List of blog posts with title, url, content, datetime, source
-    """
-    headers = {"Authorization": f"KakaoAK {os.getenv('DAUM_API_KEY')}"}
-    params = {"query": keyword, "size": max_results, "sort": "accuracy"}
-
-    try:
-        response = requests.get(os.getenv("DAUM_API_URL"), headers=headers, params=params)
-        response.raise_for_status()
-        data = response.json()
-
-        return [
-            {
-                "title": item["title"],
-                "url": item["url"],
-                "content": item["contents"],
-                "datetime": parser.parse(item["datetime"]).strftime("%Y-%m-%d %H:%M"),
-                "source": "daum_blog"
-            }
-            for item in data.get("documents", [])
-        ]
-    except Exception as e:
-        raise RuntimeError(f"Daum API error: {str(e)}")
-
-def clean_html(text: str) -> str:
-    """Remove HTML tags and entities"""
-    if not text:
-        return ""
-    text = re.sub(r"<[^>]+>", "", text)  # Remove HTML tags
-    text = re.sub(r"&[^;]*;", "", text)  # Remove HTML entities
-    return text
-
-@async_time_logger("search_naver_blogs")
-async def search_naver_blogs(keyword: str, max_result: int = 10) -> List[Dict[str, str]]:
-    """
-    Naver Blog Search Function
-
-    Args:
-        keyword (str): Search keyword
-        max_result (int): Maximum number of results
-
-    Returns:
-        List[Dict[str, str]]: List of blog posts with title, url, content, datetime, source
-    """
-    posts = []
-
-    try:
-        display = min(max_result, 100)
-        url = f"{os.getenv('NAVER_API_URL')}?query={keyword}&display={display}"
-        headers = {
-            "X-Naver-Client-Id": os.getenv("NAVER_CLIENT_ID"),
-            "X-Naver-Client-Secret": os.getenv("NAVER_CLIENT_SECRET")
-        }
-
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-
-        for item in data.get("items", [])[:max_result]:
-            post_date = datetime.strptime(item["postdate"], "%Y%m%d")
-            posts.append({
-                "title": clean_html(item["title"]),
-                "url": item["link"],
-                "content": clean_html(item["description"]),
-                "datetime": post_date.strftime("%Y-%m-%d 00:00"),
-                "source": "naver_blog"
-            })
-        return posts
-    except Exception as e:
-        raise RuntimeError(f"Naver blog search error: {str(e)}")
-
-@tool(args_schema=CommunitySearchSchema)
-@async_time_logger("community_search_tool")
-async def community_search_tool(
-    korean_keyword: str,
-    english_keyword: str,
-    platform: str = "all",
-    max_results: int = 10
-) -> Dict[str, Any]:
-    """
-    Blog and Community Post Search Tool
+    IT News Keyword Trend Tool
 
     When to use:
-        - When analyzing public sentiment on blogs or platforms like Reddit.
+        - When analyzing trending keywords in IT news for a specific period.
+        - When retrieving keyword frequencies, sentiment analysis, and related articles.
 
     Args:
-        korean_keyword (str): Korean keyword for search
-        english_keyword (str): English keyword for search
-        platform (str): 'all', 'daum', 'naver', or 'reddit'
-        max_results (int): Maximum number of results
+        period (str): Period of analysis ('daily', 'weekly', or 'monthly')
+        date (str): Reference date (YYYY-MM-DD)
 
     Returns:
         Dict[str, Any]:
-            - korean_keyword (str): Korean keyword
-            - english_keyword (str): English keyword
-            - platform (str): Platform used
-            - results (List[Dict]): List of posts with title, url, content, datetime, source
+            - date (str): Reference date
+            - main_chart_url (str): URL of the main keyword frequency bar chart
+            - keywords (List[Dict]): List of keyword data, each containing:
+                - keyword (str): Keyword
+                - frequency (int): Frequency of the keyword
+                - sentiment_percent (Dict): Sentiment distribution percentages
+                - articles (List[Dict]): List of articles with title, content, date, url, media_company
     """
-    tasks = []
-    if platform in ["all", "daum"]:
-        tasks.append(search_daum_blogs(korean_keyword, max_results))
-    if platform in ["all", "naver"]:
-        tasks.append(search_naver_blogs(korean_keyword, max_results))
-    if platform in ["all", "reddit"]:
-        tasks.append(search_reddit_posts(english_keyword, max_results))
 
-    results_nested = await asyncio.gather(*tasks)
-    results = [item for sublist in results_nested for item in sublist]
-
-    # 최신순 정렬
-    results_sorted = sorted(results, key=lambda x: x["datetime"], reverse=True)
-
-    return {
-        "korean_keyword": korean_keyword,
-        "english_keyword": english_keyword,
-        "platform": platform,
-        "results": results_sorted[:max_results]
-    }
-
-def get_reddit_access_token():
-    """
-    Obtain Reddit access token
-    """
-    auth = HTTPBasicAuth(os.getenv("REDDIT_CLIENT_ID"), os.getenv("REDDIT_CLIENT_SECRET"))
-    headers = {
-        "User-Agent": "web:com.dbfis.chatbot:v1.0.0 (by /u/Hot_Mission1860)",
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
-    data = {
-        "grant_type": "password",
-        "username": os.getenv("REDDIT_USERNAME"),
-        "password": os.getenv("REDDIT_PASSWORD")
-    }
-
-    response = requests.post("https://www.reddit.com/api/v1/access_token", headers=headers, auth=auth, data=data)
-
-    if response.status_code != 200:
-        raise Exception(f"Reddit OAuth authentication failed: {response.json()}")
-
-    return response.json().get("access_token")
-
-@async_time_logger("search_reddit_posts")
-async def search_reddit_posts(keyword: str, max_result: int = 10) -> List[Dict[str, str]]:
-    """
-    Reddit Post Search Function
-    """
-    try:
-        access_token = get_reddit_access_token()
-        headers = {
-            "Authorization": f"bearer {access_token}",
-            "User-Agent": "web:com.dbfis.chatbot:v1.0.0"
-        }
-        url = f"https://oauth.reddit.com/search?q={keyword}&limit={max_result}&sort=hot"
-        response = requests.get(url, headers=headers)
-        if response.status_code != 200:
-            raise Exception(f"Reddit search failed: {response.json()}")
-        data = response.json()
-        return [
-            {
-                "title": item["data"]["title"],
-                "url": f"https://www.reddit.com{item['data']['permalink']}",
-                "content": item["data"].get("selftext", "").strip()[:500],
-                "datetime": datetime.utcfromtimestamp(item["data"]["created_utc"]).replace(tzinfo=timezone.utc).astimezone(KST).strftime('%Y-%m-%d %H:%M'),
-                "source": "reddit"
-            }
-            for item in data.get("data", {}).get("children", [])
-        ]
-    except Exception as e:
-        raise RuntimeError(f"Reddit search error: {str(e)}")
-
-@tool(args_schema=SearchWebSchema)
-@async_time_logger("web_search_tool")
-async def web_search_tool(keyword: str, max_results: int=10) -> List[Dict[str, str]]:
-    """
-    Real-time Web Page Search Tool using Tavily API
-
-    When to use:
-        - When quickly exploring recent websites, blogs, or articles.
-        - When structured JSON search results are required.
-        - When integrating with a URL content extraction tool for detailed information.
-
-    Args:
-        keyword (str): Search keyword
-        max_results (int, optional): Maximum number of results (1-20, default 10)
-
-    Returns:
-        List[Dict[str, str]]: List of search results with title, content, and URL
-    """
-    try:
-        tavily_tool = TavilySearch(
-            max_results=max_results
-        )
-        result = await tavily_tool.ainvoke({"query": keyword})
-        logger.info(f"Tavily search result: {result}")
-        return result
-    except Exception as e:
-        logger.error(f"Tavily search failed: {str(e)}")
-        return []
-
-@tool(args_schema=YoutubeVideoSchema)
-@async_time_logger("youtube_video_tool")
-async def youtube_video_tool(query: str, max_results: int = 5):
-    """
-    YouTube Video Search Tool using YouTube Data API
-
-    When to use:
-        - When searching for recent or popular YouTube videos.
-        - When exploring trends or topics through video content.
-        - When thumbnails or video links are needed for reports.
-
-    Args:
-        query (str): Search keyword
-        max_results (int, optional): Maximum number of results (1-50, default 5)
-
-    Returns:
-        List[Dict]: List of videos with videoId, title, description, channelTitle, publishedAt, thumbnailUrl, url
-    """
-    youtube = build("youtube", "v3", developerKey=os.getenv("YOUTUBE_API_KEY"))
-
-    search_response = youtube.search().list(
-        q=query,
-        part="snippet",
-        type="video",
-        maxResults=max_results,
-        regionCode="KR",
-        order="relevance"
-    ).execute()
-
-    results = [
-        {
-            "videoId": item["id"]["videoId"],
-            "title": item["snippet"]["title"],
-            "description": item["snippet"]["description"],
-            "channelTitle": item["snippet"]["channelTitle"],
-            "publishedAt": item["snippet"]["publishedAt"],
-            "thumbnailUrl": item["snippet"]["thumbnails"]["high"]["url"],
-            "url": f"https://www.youtube.com/watch?v={item['id']['videoId']}"
-        }
-        for item in search_response["items"]
-    ]
-    return results
-
-@tool(args_schema=RequestUrlSchema)
-@async_time_logger("request_url_tool")
-async def request_url_tool(input_url: str) -> List[Dict[str, Any]]:
-    """
-    Web or PDF Content Extraction Tool
-
-    When to use:
-        - When extracting full text from a specific URL.
-        - When raw text is needed for summarization, translation, or analysis.
-
-    Args:
-        input_url (str): Absolute URL of an HTTP(S) webpage or PDF file
-
-    Returns:
-        List[Dict[str, Any]]: List containing extracted content or error message
-    """
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
-    }
-
-    try:
-        response = requests.get(input_url, headers=headers, timeout=10, verify=True)
-        response.raise_for_status()
-
-        if input_url.lower().endswith(".pdf"):
-            text = ""
-            with io.BytesIO(response.content) as f:
-                pdf = PdfReader(f)
-                for page in pdf.pages:
-                    extracted = page.extract_text()
-                    if extracted:
-                        text += extracted + "\n"
-            if not text.strip():
-                return [{"error": "Unable to extract text from PDF."}]
-            return [{"content": text.strip()}]
-        else:
-            soup = BeautifulSoup(response.text, "html.parser")
-            if soup.body:
-                text = soup.body.get_text()[:5000]
-            else:
-                text = soup.get_text()[:5000]
-            text = re.sub(r"\s+", " ", text).strip()
-            if not text or len(text) < 100:
-                return [{"error": "No valid text found."}]
-            if "example domain" in text.lower():
-                return [{"error": "No valid text found."}]
-            return [{"content": text}]
-
-    except requests.exceptions.SSLError:
-        return [{"error": "[Blocked] Invalid SSL certificate detected, site deemed insecure."}]
-    except requests.RequestException as e:
-        return [{"error": f"[Request Failed] {str(e)}"}]
-    except Exception as e:
-        return [{"error": f"[Processing Error] {str(e)}"}]
-
-@tool(args_schema=WikipediaSchema)
-@async_time_logger("wikipedia_tool")
-async def wikipedia_tool(query: str) -> List[Dict[str, Any]]:
-    """
-    Wikipedia Summary Tool (Korean prioritized)
-
-    When to use:
-        - When formal and academic definitions are needed.
-        - When English summaries are automatically provided if Korean is unavailable.
-
-    Args:
-        query (str): Search keyword
-
-    Returns:
-        List[Dict[str, Any]]: List containing summarized content or error message
-    """
-    # redis 캐싱
     r = get_redis_client()
+    cache_key = f"{period}_trend:{date}:"
+    if (cached := r.get(cache_key)):
+        return json.loads(cached)
 
-    # 한국어 우선, 실패 시 영어
-    for lang in ["ko", "en"]:
-        try:
-            cache_key = f"wiki:{lang}:{query}"
-            cached = r.get(cache_key)
-            if cached:
-                return [{"content": cached}]
+    if period == "daily":
+        date_start = date_end = date
 
-            # wiki_client로 wikipedia 모듈 전달
-            api_wrapper = WikipediaAPIWrapper(
-                wiki_client=wikipedia,       # wikipedia-api 클라이언트
-                top_k_results=2,            # 최대 2개 문서
-                doc_content_chars_max=1500, # 요약 최대 1500자
-                lang=lang                   # 언어 설정
-            )
-            wikipedia_tool = WikipediaQueryRun(
-                api_wrapper=api_wrapper,
-            )
-            result = wikipedia_tool.run(query)
-            summaries = result.split("\n")[:10]  # 최대 10줄 요약
-            content = f"Wikipedia Summary ({lang}):\n" + "\n".join(summaries) if summaries else f"No information found for '{query}' on Wikipedia ({lang})."
-            r.set(cache_key, content)
-            return [{"content": content}]
-        except Exception as e:
-            if lang == "en":  # 영어까지 실패 시
-                return [{"error": f"Wikipedia search error: {str(e)}"}]
-            continue
+    elif period == "weekly":
+        date_end = date
+        date_start = (datetime.fromisoformat(date) - timedelta(days=6)).strftime("%Y-%m-%d")
+
+    elif period == "monthly":
+        date_end = date
+        date_start = (datetime.fromisoformat(date) - timedelta(days=30)).strftime("%Y-%m-%d")
+
+    else:
+        return {"error": "Period must be 'daily' or 'weekly' or 'monthly'."}
+
+    # PostgreSQL에서 키워드 조회
+    conn = get_db_connection()
+    cur = conn.cursor()
+    if period == "daily":
+        cur.execute("""
+            SELECT keyword, SUM(frequency)
+            FROM keyword_frequencies
+            WHERE date = %s
+            GROUP BY keyword
+            ORDER BY SUM(frequency) DESC
+            LIMIT 10
+        """, (date,))
+
+    else:
+        cur.execute("""
+            SELECT keyword, SUM(frequency)
+            FROM keyword_frequencies
+            WHERE date BETWEEN %s AND %s
+            GROUP BY keyword
+            ORDER BY SUM(frequency) DESC
+            LIMIT 10
+        """, (date_start, date_end))
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not rows:
+        return {
+            "date": date,
+            "main_chart_url": None,
+            "keywords": []
+        }
+
+    keywords = [kw for kw, _ in rows]
+    keyword_frequencies = dict(rows)
+
+    # 차트 생성
+    df_main = pd.DataFrame({
+        "keyword": keywords,
+        "frequency": [keyword_frequencies[kw] for kw in keywords]
+    })
+    fig_main = px.bar(
+        df_main, x="frequency", y="keyword",
+        title="주요 키워드 빈도", height=400,
+        labels={"frequency": "출현 빈도", "keyword": "키워드"}
+    )
+    fig_main.update_layout(
+        margin=dict(l=120, r=20, t=50, b=20),
+        yaxis=dict(categoryorder="total ascending"),
+        font=dict(family="Noto Sans CJK KR")
+    )
+    key_main = f"{period}/{date}/main-bar.png"
+    main_chart_url = upload_chart_to_s3(fig_main, key_main)
+
+    # 병렬 작업 수집
+    tasks = {}
+    for kw in keywords:
+        tasks[kw] = {
+            "domestic": asyncio.create_task(fetch_domestic_articles(kw, date_start, date_end, size=3)),
+            "sentiment": asyncio.create_task(fetch_sentiment_distribution(kw, date_start, date_end))
+        }
+
+    results = []
+    for kw in keywords:
+        dom = await tasks[kw]["domestic"]
+        sent = await tasks[kw]["sentiment"]
+
+        results.append({
+            "keyword": kw,
+            "frequency": keyword_frequencies[kw],
+            "sentiment_percent": sent,
+            "articles": dom[:3],
+        })
+
+    result = {
+        "date": date,
+        "main_chart_url": main_chart_url,
+        "keywords": results
+    }
+
+    r.set(cache_key, json.dumps(result, ensure_ascii=False))
+    return result
+
+
+
+@tool(args_schema=GlobalITNewsTrendReportSchema)
+async def global_it_news_trend_report_tool(date_start=None, date_end=None):
+    """
+        Global IT News Trend Report Generation Tool (Domestic + Foreign)
+
+        When to use:
+            - When a structured IT industry trend report is needed for a given time range.
+            - When analyzing domestic and foreign keyword frequencies and summarizing relevant news articles.
+            - When generating a downloadable document (DOCX) with visualizations.
+
+        Args:
+            date_start (str, optional): Start date in format YYYY-MM-DD. Defaults to yesterday.
+            date_end (str, optional): End date in format YYYY-MM-DD. Defaults to yesterday.
+
+        Returns:
+            List[Dict[str, Any]]:
+                - On success: [{'content': download_message, 'url': presigned_url}]
+                - On failure: [{'error': error_message}]
+
+        Notes:
+            - Combines top keywords from both domestic and foreign news databases.
+            - Generates bar charts for each and summarizes news in structured document format.
+            - Report sections: 개요 → 국내 뉴스 분석 → 해외 뉴스 분석 → 결론.
+    """
+
+    kst = ZoneInfo("Asia/Seoul")
+    now = datetime.now(kst)
+    yesterday = (now - timedelta(days=1)).strftime('%Y-%m-%d')
+
+    date_start = date_start or yesterday
+    date_end = date_end or yesterday
+
+    cache_key = f"trend_report:{date_start}:{date_end}"
+    r = get_redis_client()
+    if cached := r.get(cache_key):
+        return cached
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT keyword, SUM(frequency)
+        FROM keyword_analysis
+        WHERE date BETWEEN %s AND %s
+        GROUP BY keyword
+        ORDER BY SUM(frequency) DESC
+        LIMIT 10
+    """, (date_start, date_end))
+    dom_rows = cur.fetchall()
+
+    if not dom_rows:
+        return [{"error": f"No domestic keywords found between {date_start} and {date_end}."}]
+
+    cur.execute("""
+        SELECT keyword, SUM(frequency)
+        FROM foreign_keyword_analysis
+        WHERE date BETWEEN %s AND %s
+        GROUP BY keyword
+        ORDER BY SUM(frequency) DESC
+        LIMIT 10
+    """, (date_start, date_end))
+    for_rows = cur.fetchall()
+
+    if not for_rows:
+        return [{"error": f"No foriegn keywords found between {date_start} and {date_end}."}]
+
+    cur.close()
+    conn.close()
+
+    def make_chart(rows, title_prefix):
+        labels, freqs = zip(*rows)
+
+        system = platform.system()
+        font_path = None
+
+        if system == "Darwin":
+            candidates = [
+                "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+                "/Library/Fonts/AppleGothic.ttf",
+                "/System/Library/Fonts/AppleSDGothicNeo.ttc"
+            ]
+        elif system == "Linux":
+            candidates = [
+                "/usr/share/fonts/noto/NotoSansCJKkr-Regular.otf",
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
+            ]
+        elif system == "Windows":
+            candidates = [
+                "C:/Windows/Fonts/malgun.ttf",
+                "C:/Windows/Fonts/batang.ttc",
+                "C:/Windows/Fonts/gulim.ttc"
+            ]
+        else:
+            candidates = []
+
+        for path in candidates:
+            if os.path.exists(path):
+                font_path = path
+                break
+
+        if font_path:
+            font_prop = fm.FontProperties(fname=font_path)
+            plt.rcParams['font.family'] = font_prop.get_name()
+        else:
+            plt.rcParams['font.family'] = 'Arial'
+        plt.rcParams['axes.unicode_minus'] = False
+
+        plt.figure(figsize=(8, 5))
+        bars = plt.bar(labels, freqs, color='skyblue')
+        plt.title(f"{date_start} ~ {date_end} {title_prefix} 키워드 빈도")
+        for bar in bars:
+            yval = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2, yval + 0.2, int(yval), ha='center')
+        base_dir = os.path.abspath("./data/reports")
+        os.makedirs(base_dir, exist_ok=True)
+        filename = f"{title_prefix}_keywords_{date_start}_{date_end}_{uuid4().hex[:6]}.png"
+        path = os.path.join(base_dir, filename)
+        plt.tight_layout()
+        plt.savefig(path)
+        plt.close()
+        return path, '\n'.join([f"- {kw}: {fr} 빈도" for kw, fr in rows])
+
+    dom_chart_path, dom_kw_summary = make_chart(dom_rows, "국내")
+    for_chart_path, for_kw_summary = make_chart(for_rows, "해외")
+
+    async def summarize_articles(article_list):
+        summaries = []
+        for article in article_list:
+            summary = f"- {article['title']} ({article['date']}, {article['media_company']})\n  {article['content'].strip()}"
+            summaries.append(summary)
+        return "\n".join(summaries)
+
+    dom_articles = ""
+    for kw, _ in dom_rows:
+        articles = await fetch_domestic_articles(kw, date_start, date_end)
+        dom_articles += f"[국내 키워드: {kw}]\n"
+        dom_articles += await summarize_articles(articles) + "\n\n"
+
+    for_articles = ""
+    for kw, _ in for_rows:
+        articles = await fetch_foreign_articles(kw, date_start, date_end)
+        for_articles += f"[해외 키워드: {kw}]\n"
+        for_articles += await summarize_articles(articles) + "\n\n"
+
+    prompt = PromptTemplate.from_template("""
+    당신은 기업 리서치 보고서를 전문적으로 작성하는 AI입니다.
+    다음은 국내외 IT 뉴스 키워드 빈도 분석 및 관련 기사 내용을 요약한 결과입니다.
+    작성 시 다음 규칙을 반드시 따르세요:
+    - 각 섹션은 다음과 같이 시작: "개요:", "국내 뉴스 분석:", "해외 뉴스 분석:", "결론:"
+    - 섹션 제목은 반드시 맨 앞에 한 줄로 출력하세요 (예: "개요:")
+    - markdown/기호 사용 없이 서술식 문단 작성
+    - 분석에 활용된 키워드는 반드시 요약문에 녹여서 설명
+    - 통계/수치가 포함될 경우 자연스럽게 설명에 포함
+
+    [분석 기간]
+    {date_start} ~ {date_end}
+
+    [국내 키워드 요약]
+    {domestic_keywords}
+
+    [국내 뉴스 기사]
+    {domestic_articles}
+
+    [해외 키워드 요약]
+    {foreign_keywords}
+
+    [해외 뉴스 기사]
+    {foreign_articles}
+    """)
+
+    chain = LLMChain(
+        llm=ChatOpenAI(model="gpt-4o-mini", temperature=0.3),
+        prompt=prompt
+    )
+
+    result = chain.invoke({
+        "date_start": date_start,
+        "date_end": date_end,
+        "domestic_keywords": dom_kw_summary,
+        "domestic_articles": dom_articles,
+        "foreign_keywords": for_kw_summary,
+        "foreign_articles": for_articles
+    })
+    gpt_text = result["text"]
+
+    def extract_section(text, title):
+        pattern = rf"{title}:\s*(.*?)(?=\n(?:개요|국내 뉴스 분석|해외 뉴스 분석|결론):|\Z)"
+        match = re.search(pattern, text, re.DOTALL)
+        return match.group(1).strip() if match else "[내용 없음]"
+
+    doc = Document()
+    doc.add_heading("개요", level=1)
+    doc.add_paragraph(extract_section(gpt_text, "개요"))
+
+    doc.add_heading("국내 뉴스 분석", level=1)
+    doc.add_picture(dom_chart_path, width=Inches(5.5))
+    doc.add_paragraph(extract_section(gpt_text, "국내 뉴스 분석"))
+
+    doc.add_heading("해외 뉴스 분석", level=1)
+    doc.add_picture(for_chart_path, width=Inches(5.5))
+    doc.add_paragraph(extract_section(gpt_text, "해외 뉴스 분석"))
+
+    doc.add_heading("결론", level=1)
+    doc.add_paragraph(extract_section(gpt_text, "결론"))
+
+    report_filename = f"Industry_Trend_Report_{date_start}_{date_end}_{uuid4().hex[:8]}.docx"
+    report_path = os.path.join("./data/reports", report_filename)
+    doc.save(report_path)
+
+    s3_key = f"report/{os.path.basename(report_path)}"
+    s3, bucket = get_s3_client_and_bucket()
+    with open(report_path, "rb") as f:
+        s3.put_object(
+            Body=f,
+            Bucket=bucket,
+            Key=s3_key,
+            ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+
+    url = f"https://{bucket}.s3.amazonaws.com/{s3_key}"
+    r.setex(cache_key, timedelta(days=7), url)
+    return url
+
+
 
 @tool(args_schema=GoogleTrendsSchema)
 @async_time_logger("google_trends_tool")
@@ -697,269 +698,6 @@ async def google_trends_tool(query: str, start_date: str = None, end_date: str =
             return {"error": f"Rate limit exceeded for query '{query}'. Try again later."}
         return {"error": f"Error retrieving Google Trends data: {str(e)}"}
 
-@tool(args_schema=GenerateNewsTrendReportSchema)
-@async_time_logger("generate_news_trend_report_tool")
-async def generate_news_trend_report_tool(
-    date_start: str = None,
-    date_end: str = None
-) -> List[Dict[str, Any]]:
-    """
-    Naver IT News Trend Report Generation Tool
-
-    When to use:
-        - When explicitly requested to generate a trend report.
-        - When summarizing IT trends for a specific date or period in a document.
-
-    Args:
-        date_start (str, optional): Start date (YYYY-MM-DD), defaults to yesterday
-        date_end (str, optional): End date (YYYY-MM-DD), defaults to yesterday
-
-    Returns:
-        List[Dict[str, Any]]: List containing report URL or error message
-
-    Notes:
-        - Today's date (after 00:00) or future dates are not supported.
-    """
-    kst = ZoneInfo("Asia/Seoul")
-    kst_now = datetime.now(kst)
-
-    yesterday = (kst_now - timedelta(days=1)).strftime('%Y-%m-%d')
-
-    # 날짜 초기값
-    if date_start is None:
-        date_start = yesterday
-    if date_end is None:
-        date_end = date_start
-
-    # 날짜 형식 검증 및 미래 날짜 금지
-    try:
-        date_start_dt = datetime.strptime(date_start, "%Y-%m-%d")
-        date_end_dt = datetime.strptime(date_end, "%Y-%m-%d")
-    except ValueError:
-        return [{"error": "[Request Error] Invalid date format. Must be YYYY-MM-DD."}]
-
-    if date_start_dt > date_end_dt:
-        return [{"error": "[Request Error] Start date cannot be later than end date."}]
-
-    if date_end_dt >= datetime.strptime(kst_now.strftime('%Y-%m-%d'), "%Y-%m-%d"):
-        return [{"error": "[Request Error] News data for today or future dates is not yet available."}]
-
-    cache_key = f"trend_report:{date_start}:{date_end}"
-    r = get_redis_client()
-    cached_url = r.get(cache_key)
-    if cached_url:
-        return [{"content": f"Cached report found in Redis.\n[Download Link]({cached_url}) (valid for 7 days)", "url": cached_url}]
-
-    # 1. 키워드 가져오기
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT keyword, SUM(frequency) as total_frequency 
-            FROM keyword_frequencies
-            WHERE date BETWEEN %s AND %s
-            GROUP BY keyword
-            ORDER BY total_frequency DESC
-            LIMIT 10
-        """, (date_start, date_end))
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        return [{"error": f"[DB Connection Failed] {str(e)}"}]
-
-    if not rows:
-        return [{"error": f"[No Data] No keywords found for the date range {date_start} to {date_end}."}]
-
-    keywords = [row[0] for row in rows]
-    frequencies = [row[1] for row in rows]
-    keyword_summary = "\n".join([f"- {w}: {c} occurrences" for w, c in rows])
-
-    # 2. Elasticsearch 검색
-    es = get_es_client()
-    combined_contents = ""
-
-    for kw in keywords:
-        try:
-            query = {
-                "bool": {
-                    "must": [
-                        {
-                            "bool": {
-                                "should": [
-                                    {"match_phrase": {"title": kw}},
-                                    {"match_phrase": {"content": kw}}
-                                ]
-                            }
-                        },
-                        {"range": {"date": {"gte": date_start, "lte": date_end}}}
-                    ]
-                }
-            }
-
-            response = es.search(
-                index="news_article",
-                body={"query": query, "size": 10}
-            )
-
-            if response["hits"]["hits"]:
-                for hit in response["hits"]["hits"]:
-                    source = hit["_source"]
-                    title = source.get("title", "")
-                    content = source.get("content", "").strip()
-                    date = source.get("date", "null")
-                    media = source.get("media_company", "null")
-                    url = source.get("url", "null")
-
-                    combined_contents += (
-                        f"\n[Keyword: {kw}] | Article Title: {title} | Date: {date} | Media: {media} | Link: {url}\n{content}\n"
-                    )
-            else:
-                combined_contents += f"\n[Keyword: {kw}] No related articles found.\n"
-
-        except Exception as e:
-            combined_contents += f"\n[Keyword: {kw} Search Failed] {str(e)}\n"
-
-    if not combined_contents.strip():
-        return [{"error": f"[No News] No news found for keywords in the date range {date_start} to {date_end}."}]
-
-    # 3. GPT 보고서 생성
-    prompt = PromptTemplate.from_template("""
-    당신은 기업 리서치 보고서를 전문적으로 작성하는 AI입니다.
-
-    아래에 제공된 키워드 빈도 정보와 관련 뉴스 기사 내용을 기반으로,
-    [개요 - 본문 - 결론] 구조에 따라 형식을 갖춘 공식 보고서를 작성하세요.
-
-    보고서는 마크다운이나 특수 기호 없이 일반 문단 형식으로 작성합니다.
-    각 섹션은 '개요', '본문', '결론' 제목으로 구분해 주세요.
-
-    특히 본문에서는 키워드 빈도를 언급하고, 뉴스 기사들을 요약하며 전반적인 트렌드와 패턴에 중점을 둡니다.
-
-    {date_start}부터 {date_end}까지의 IT 키워드 트렌드:
-
-    [키워드 요약]
-    {keywords}
-
-    [관련 뉴스 기사]
-    {articles}
-    """)
-
-    chain = LLMChain(
-        llm=ChatOpenAI(model="gpt-4o-mini", temperature=0),
-        prompt=prompt
-    )
-
-    try:
-        result = chain.invoke({
-            "date_start": date_start,
-            "date_end": date_end,
-            "keywords": keyword_summary,
-            "articles": combined_contents
-        })
-        gpt_text = result["text"]
-
-        chart_path = generate_keyword_bar_chart(keywords, frequencies, date_start, date_end)
-        filename = f"TRENDB_report_{date_start}_{date_end}_{uuid4().hex[:8]}.docx"
-        file_path = save_report_as_docx(gpt_text, filename, image_path=chart_path)
-
-        presigned_url = upload_report_to_s3(file_path)
-
-        r.setex(cache_key, timedelta(days=7), presigned_url)
-        return [{"content": f"Report generated successfully!\n[Download Link]({presigned_url}) (valid for 7 days)", "url": presigned_url}]
-
-    except Exception as e:
-        return [{"error": f"[GPT or S3 Processing Failed] {str(e)}"}]
-
-def get_font_path():
-    # 서버용 경로
-    ec2_font = "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc"
-    # Mac용 경로
-    mac_font = "/System/Library/Fonts/Supplemental/AppleGothic.ttf"  # 또는 NotoSans가 설치된 경로
-    # Windows용 경로 (예시)
-    win_font = "C:/Windows/Fonts/malgun.ttf"
-
-    if os.path.exists(ec2_font):
-        return ec2_font
-    elif os.path.exists(mac_font):
-        return mac_font
-    elif os.path.exists(win_font):
-        return win_font
-    else:
-        raise FileNotFoundError("No supported Korean font found.")
-
-def generate_keyword_bar_chart(keywords, counts, date_start, date_end) -> str:
-    font_path = get_font_path()
-    font_prop = fm.FontProperties(fname=font_path)
-    plt.rcParams['font.family'] = font_prop.get_name()
-    plt.rcParams['axes.unicode_minus'] = False
-
-    plt.figure(figsize=(8, 5))
-    bars = plt.bar(keywords, counts, color='skyblue')
-    plt.title(f"{date_start}~{date_end} 네이버 뉴스 키워드 빈도", fontsize=14)
-    plt.xlabel("키워드")
-    plt.ylabel("출현 빈도")
-
-    for bar in bars:
-        yval = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2, yval + 0.2, int(yval), ha='center', va='bottom')
-
-    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data/reports"))
-    os.makedirs(base_dir, exist_ok=True)
-    filename = f"keyword_chart_{date_start}_{date_end}_{uuid4().hex[:6]}.png"
-    filepath = os.path.join(base_dir, filename)
-    plt.tight_layout()
-    plt.savefig(filepath)
-    plt.close()
-    return filepath
-
-def save_report_as_docx(content: str, filename: str, image_path: str = None) -> str:
-    doc = Document()
-    lines = content.split("\n")
-
-    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data/reports"))
-    os.makedirs(base_dir, exist_ok=True)
-    full_path = os.path.join(base_dir, filename)
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("Overview"):
-            doc.add_heading("Overview", level=1)
-        elif line.startswith("Main Body"):
-            doc.add_heading("Main Body", level=1)
-            if image_path and os.path.exists(image_path):
-                doc.add_picture(image_path, width=Inches(5.5))
-                doc.add_paragraph("")
-        elif line.startswith("Conclusion"):
-            doc.add_heading("Conclusion", level=1)
-        else:
-            doc.add_paragraph(line)
-
-    doc.save(full_path)
-    return full_path
-
-def upload_report_to_s3(file_path: str) -> str:
-    s3_client = boto3.client(
-        "s3",
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-        region_name=os.getenv("AWS_DEFAULT_REGION")
-    )
-
-    bucket_name = "trend-charts"
-    s3_key = f"report/{os.path.basename(file_path)}"
-
-    s3_client.upload_file(file_path, bucket_name, s3_key)
-
-    presigned_url = s3_client.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": bucket_name, "Key": s3_key},
-        ExpiresIn=604800
-    )
-
-    return presigned_url
-
 def slugify(text: str) -> str:
     """Convert Korean keywords to ASCII strings."""
     ascii_text = unidecode(text)
@@ -968,356 +706,371 @@ def slugify(text: str) -> str:
     ascii_text = ''.join(c if c.isalnum() or c == '-' else '_' for c in ascii_text)
     return ascii_text.strip('_')
 
-@tool(args_schema=ITNewsTrendKeywordSchema)
-@async_time_logger("it_news_trend_keyword_tool")
-async def it_news_trend_keyword_tool(
-    *,
-    period: str,   # "daily" 또는 "weekly"
-    date: str
-) -> Dict[str, Any]:
+
+@async_time_logger("search_daum_blogs")
+async def search_daum_blogs(keyword: str, max_results: int = 10) -> List[Dict[str, str]]:
     """
-    IT News Keyword Trend Tool
+    Daum Blog Post Search Function
 
     Args:
-        period (str): 'daily' or 'weekly'
-        date (str): Reference date (YYYY-MM-DD)
+        keyword (str): Search keyword
+        max_results (int): Maximum number of results
 
     Returns:
-        Dict:
-            - date (str): Reference date
-            - main_chart_url (str): URL of the main keyword frequency bar chart
-            - top_keywords (List[str]): List of top 10 keywords
-            - keyword_frequencies (Dict[str, int]): Frequencies of top keywords
-            - results (List[Dict]): List of articles (keyword, title, content, date, url, media_company)
+        List[Dict[str, str]]: List of blog posts with title, url, content, datetime, source
     """
-    # 캐시 조회
-    r = get_redis_client()
-    cache_key = f"{period}_trend:{date}:"
-    if (cached := r.get(cache_key)):
-        return json.loads(cached)
+    headers = {"Authorization": f"KakaoAK {os.getenv('DAUM_API_KEY')}"}
+    params = {"query": keyword, "size": max_results, "sort": "accuracy"}
 
-    if period == "daily":
-        resp = requests.get(f"http://localhost:8080/api/insight?date={date}")
-        records = resp.json().get("top_keywords", [])
-        chart_title = f"{date} Daily Main Keywords"
-        key_prefix = f"daily/{date}"
-        date_start = date_end = date
-    elif period == "weekly":
-        resp = requests.get(f"http://localhost:8080/api/insight/weekly?date={date}")
-        records = resp.json().get("top_weekly_keywords", [])
-        chart_title = f"{date} Weekly Main Keywords"
-        key_prefix = f"weekly/{date}"
-        date_end = date
-        date_start = (datetime.fromisoformat(date) - timedelta(days=6)).strftime("%Y-%m-%d")
-    else:
-        return {"error": "Period must be 'daily' or 'weekly'."}
+    try:
+        response = requests.get(os.getenv("DAUM_API_URL"), headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()
 
-    if not records:
-        return {
-            "date": date,
-            "main_chart_url": None,
-            "top_keywords": [],
-            "keyword_frequencies": {},
-            "articles": []
+        return [
+            {
+                "title": item["title"],
+                "url": item["url"],
+                "content": item["contents"],
+                "datetime": parser.parse(item["datetime"]).strftime("%Y-%m-%d %H:%M"),
+                "source": "daum_blog"
+            }
+            for item in data.get("documents", [])
+        ]
+    except Exception as e:
+        raise RuntimeError(f"Daum API error: {str(e)}")
+
+def clean_html(text: str) -> str:
+    """Remove HTML tags and entities"""
+    if not text:
+        return ""
+    text = re.sub(r"<[^>]+>", "", text)  # Remove HTML tags
+    text = re.sub(r"&[^;]*;", "", text)  # Remove HTML entities
+    return text
+
+@async_time_logger("search_naver_blogs")
+async def search_naver_blogs(keyword: str, max_result: int = 10) -> List[Dict[str, str]]:
+    """
+    Naver Blog Search Function
+
+    Args:
+        keyword (str): Search keyword
+        max_result (int): Maximum number of results
+
+    Returns:
+        List[Dict[str, str]]: List of blog posts with title, url, content, datetime, source
+    """
+    posts = []
+
+    try:
+        display = min(max_result, 100)
+        url = f"{os.getenv('NAVER_API_URL')}?query={keyword}&display={display}"
+        headers = {
+            "X-Naver-Client-Id": os.getenv("NAVER_CLIENT_ID"),
+            "X-Naver-Client-Secret": os.getenv("NAVER_CLIENT_SECRET")
         }
 
-    # 상위 5개 키워드 선택
-    top_records = sorted(records, key=lambda x: x.get("frequency", 0) or x.get("totalFrequency", 0), reverse=True)[:10]
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
 
-    # 메인 키워드 차트 생성
-    df_main = pd.DataFrame({
-        "keyword": [kw["keyword"] for kw in top_records],
-        "frequency": [kw.get("frequency") or kw.get("totalFrequency") for kw in top_records],
-    })
-    fig_main = px.bar(
-        df_main, x="frequency", y="keyword",
-        title="주요 키워드 빈도", height=400,
-        labels={"frequency": "출현 빈도", "keyword": "키워드"}
-    )
-    fig_main.update_layout(
-        margin=dict(l=120, r=20, t=50, b=20),
-        yaxis=dict(categoryorder="total ascending"),
-        font=dict(family="Noto Sans CJK KR")
-    )
-    key_main = f"{key_prefix}/main-bar.png"
-    main_chart_url = upload_chart_to_s3(fig_main, key_main)
-
-    keyword_frequencies = {
-        kw["keyword"]: kw.get("frequency") or kw.get("totalFrequency")
-        for kw in top_records
-    }
-
-    # 기사 비동기 수집
-    article_tasks = {
-        kw["keyword"]: asyncio.create_task(fetch_domestic_articles(
-            keyword=kw["keyword"],
-            date_start=date_start,
-            date_end=date_end
-        ))
-        for kw in top_records
-    }
-
-    articles = []
-    url_set = set()  # URL 중복 방지용
-    for kw in top_records:
-        keyword_name = kw["keyword"]
-        task_result = await article_tasks[keyword_name]
-        count = 0
-        for article in task_result:
-            if article.get("url") in url_set:
-                continue  # 이미 추가한 기사면 스킵
-            articles.append({
-                "keyword": keyword_name,
-                "title": article["title"],
-                "content": article.get("content", "")[:200],
-                "date": article.get("date"),
-                "url": article.get("url"),
-                "media_company": article.get("media_company")
+        for item in data.get("items", [])[:max_result]:
+            post_date = datetime.strptime(item["postdate"], "%Y%m%d")
+            posts.append({
+                "title": clean_html(item["title"]),
+                "url": item["link"],
+                "content": clean_html(item["description"]),
+                "datetime": post_date.strftime("%Y-%m-%d 00:00"),
+                "source": "naver_blog"
             })
-            url_set.add(article.get("url"))
-            count += 1
-            if count >= 3:
-                break  # 각 키워드당 3개까지만
+        return posts
+    except Exception as e:
+        raise RuntimeError(f"Naver blog search error: {str(e)}")
 
-    result = {
-        "date": date,
-        "main_chart_url": main_chart_url,
-        "keyword_frequencies": keyword_frequencies,
-        "results": articles
+
+def get_reddit_access_token():
+    """
+    Obtain Reddit access token
+    """
+    auth = HTTPBasicAuth(os.getenv("REDDIT_CLIENT_ID"), os.getenv("REDDIT_CLIENT_SECRET"))
+    headers = {
+        "User-Agent": "web:com.dbfis.chatbot:v1.0.0 (by /u/Hot_Mission1860)",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    data = {
+        "grant_type": "password",
+        "username": os.getenv("REDDIT_USERNAME"),
+        "password": os.getenv("REDDIT_PASSWORD")
     }
 
-    r.set(cache_key, json.dumps(result, ensure_ascii=False))
-    return result
+    response = requests.post("https://www.reddit.com/api/v1/access_token", headers=headers, auth=auth, data=data)
 
-@tool(args_schema=StockHistorySchema)
-@async_time_logger("stock_history_tool")
-async def stock_history_tool(
-    symbol: str,
-    start: str,
-    end: str,
-    auto_adjust: bool = True,
-    back_adjust: bool = False,
+    if response.status_code != 200:
+        raise Exception(f"Reddit OAuth authentication failed: {response.json()}")
+
+    return response.json().get("access_token")
+
+
+@async_time_logger("search_reddit_posts")
+async def search_reddit_posts(keyword: str, max_result: int = 10) -> List[Dict[str, str]]:
+    """
+    Reddit Post Search Function
+    """
+    try:
+        access_token = get_reddit_access_token()
+        headers = {
+            "Authorization": f"bearer {access_token}",
+            "User-Agent": "web:com.dbfis.chatbot:v1.0.0"
+        }
+        url = f"https://oauth.reddit.com/search?q={keyword}&limit={max_result}&sort=hot"
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            raise Exception(f"Reddit search failed: {response.json()}")
+        data = response.json()
+        return [
+            {
+                "title": item["data"]["title"],
+                "url": f"https://www.reddit.com{item['data']['permalink']}",
+                "content": item["data"].get("selftext", "").strip()[:500],
+                "datetime": datetime.utcfromtimestamp(item["data"]["created_utc"]).replace(tzinfo=timezone.utc).astimezone(KST).strftime('%Y-%m-%d %H:%M'),
+                "source": "reddit"
+            }
+            for item in data.get("data", {}).get("children", [])
+        ]
+    except Exception as e:
+        raise RuntimeError(f"Reddit search error: {str(e)}")
+
+
+@tool(args_schema=CommunitySearchSchema)
+@async_time_logger("community_search_tool")
+async def community_search_tool(
+    korean_keyword: str,
+    english_keyword: str,
+    platform: str = "all",
+    max_results: int = 10
 ) -> Dict[str, Any]:
     """
-    Global Stock OHLCV Data Retrieval Tool (yfinance)
+    Blog and Community Post Search Tool
 
     When to use:
-        - When analyzing global stock prices and trading volumes.
+        - When analyzing public sentiment on blogs or platforms like Reddit.
 
     Args:
-        symbol (str): Ticker symbol
-        start (str): Start date (YYYY-MM-DD)
-        end (str): End date (YYYY-MM-DD)
-        auto_adjust (bool): Whether to adjust for dividends and splits
-        back_adjust (bool): Whether to apply back adjustment
+        korean_keyword (str): Korean keyword for search
+        english_keyword (str): English keyword for search
+        platform (str): 'all', 'daum', 'naver', or 'reddit'
+        max_results (int): Maximum number of results
 
     Returns:
-        Dict:
-            - symbol (str): Ticker symbol
-            - history (List[Dict]): List of daily data with date, open, high, low, close, volume
-            - info (Dict): Stock information
-            - status (str): Success or failure
-            - message (str or None): Error message if applicable
-            - chart_url (str): URL of the stock price and volume chart
-            - chart_description (str): Description of the chart
+        Dict[str, Any]:
+            - korean_keyword (str): Korean keyword
+            - english_keyword (str): English keyword
+            - platform (str): Platform used
+            - results (List[Dict]): List of posts with title, url, content, datetime, source
     """
-    response = {
-        "symbol": symbol,
-        "history": [],
-        "info": {},
-        "status": "failed",
-        "message": None
+    tasks = []
+    if platform in ["all", "daum"]:
+        tasks.append(search_daum_blogs(korean_keyword, max_results))
+    if platform in ["all", "naver"]:
+        tasks.append(search_naver_blogs(korean_keyword, max_results))
+    if platform in ["all", "reddit"]:
+        tasks.append(search_reddit_posts(english_keyword, max_results))
+
+    results_nested = await asyncio.gather(*tasks)
+    results = [item for sublist in results_nested for item in sublist]
+
+    # 최신순 정렬
+    results_sorted = sorted(results, key=lambda x: x["datetime"], reverse=True)
+
+    return {
+        "korean_keyword": korean_keyword,
+        "english_keyword": english_keyword,
+        "platform": platform,
+        "results": results_sorted[:max_results]
     }
 
-    if not symbol or not symbol.strip():
-        response["message"] = "Ticker symbol is empty."
-        return response
+
+@tool(args_schema=YoutubeVideoSchema)
+@async_time_logger("youtube_video_tool")
+async def youtube_video_tool(query: str, max_results: int = 5):
+    """
+    YouTube Video Search Tool using YouTube Data API
+
+    When to use:
+        - When searching for recent or popular YouTube videos.
+        - When exploring trends or topics through video content.
+        - When thumbnails or video links are needed for reports.
+
+    Args:
+        query (str): Search keyword
+        max_results (int, optional): Maximum number of results (1-50, default 5)
+
+    Returns:
+        List[Dict]: List of videos with videoId, title, description, channelTitle, publishedAt, thumbnailUrl, url
+    """
+    youtube = build("youtube", "v3", developerKey=os.getenv("YOUTUBE_API_KEY"))
+
+    search_response = youtube.search().list(
+        q=query,
+        part="snippet",
+        type="video",
+        maxResults=max_results,
+        regionCode="KR",
+        order="relevance"
+    ).execute()
+
+    results = [
+        {
+            "videoId": item["id"]["videoId"],
+            "title": item["snippet"]["title"],
+            "description": item["snippet"]["description"],
+            "channelTitle": item["snippet"]["channelTitle"],
+            "publishedAt": item["snippet"]["publishedAt"],
+            "thumbnailUrl": item["snippet"]["thumbnails"]["high"]["url"],
+            "url": f"https://www.youtube.com/watch?v={item['id']['videoId']}"
+        }
+        for item in search_response["items"]
+    ]
+    return results
+
+
+@tool(args_schema=SearchWebSchema)
+@async_time_logger("web_search_tool")
+async def web_search_tool(keyword: str, max_results: int=10) -> List[Dict[str, str]]:
+    """
+    Real-time Web Page Search Tool using Tavily API
+
+    When to use:
+        - When quickly exploring recent websites, blogs, or articles.
+        - When structured JSON search results are required.
+        - When integrating with a URL content extraction tool for detailed information.
+
+    Args:
+        keyword (str): Search keyword
+        max_results (int, optional): Maximum number of results (1-20, default 10)
+
+    Returns:
+        List[Dict[str, str]]: List of search results with title, content, and URL
+    """
+    try:
+        tavily_tool = TavilySearch(
+            max_results=max_results
+        )
+        result = await tavily_tool.ainvoke({"query": keyword})
+        logger.info(f"Tavily search result: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Tavily search failed: {str(e)}")
+        return []
+
+
+@tool(args_schema=RequestUrlSchema)
+@async_time_logger("request_url_tool")
+async def request_url_tool(input_url: str) -> List[Dict[str, Any]]:
+    """
+    Web or PDF Content Extraction Tool
+
+    When to use:
+        - When extracting full text from a specific URL.
+        - When raw text is needed for summarization, translation, or analysis.
+
+    Args:
+        input_url (str): Absolute URL of an HTTP(S) webpage or PDF file
+
+    Returns:
+        List[Dict[str, Any]]: List containing extracted content or error message
+    """
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
 
     try:
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(
-            start=start,
-            end=end,
-            interval="1d",
-            auto_adjust=auto_adjust,
-            back_adjust=back_adjust
-        )
+        response = requests.get(input_url, headers=headers, timeout=10, verify=True)
+        response.raise_for_status()
 
-        df = df.dropna(subset=["Close", "Volume"])
-        df = df[df["Volume"] > 0]
+        if input_url.lower().endswith(".pdf"):
+            text = ""
+            with io.BytesIO(response.content) as f:
+                pdf = PdfReader(f)
+                for page in pdf.pages:
+                    extracted = page.extract_text()
+                    if extracted:
+                        text += extracted + "\n"
+            if not text.strip():
+                return [{"error": "Unable to extract text from PDF."}]
+            return [{"content": text.strip()}]
+        else:
+            soup = BeautifulSoup(response.text, "html.parser")
+            if soup.body:
+                text = soup.body.get_text()[:5000]
+            else:
+                text = soup.get_text()[:5000]
+            text = re.sub(r"\s+", " ", text).strip()
+            if not text or len(text) < 100:
+                return [{"error": "No valid text found."}]
+            if "example domain" in text.lower():
+                return [{"error": "No valid text found."}]
+            return [{"content": text}]
 
-        if df.empty:
-            response["message"] = f"No valid trading records found for '{symbol}'."
-            return response
+    except requests.exceptions.SSLError:
+        return [{"error": "[Blocked] Invalid SSL certificate detected, site deemed insecure."}]
+    except requests.RequestException as e:
+        return [{"error": f"[Request Failed] {str(e)}"}]
+    except Exception as e:
+        return [{"error": f"[Processing Error] {str(e)}"}]
 
-        records = [{
-            "date": idx.strftime("%Y-%m-%d"),
-            "open": float(row["Open"]),
-            "high": float(row["High"]),
-            "low": float(row["Low"]),
-            "close": float(row["Close"]),
-            "volume": int(row["Volume"])
-        } for idx, row in df.iterrows()]
 
+@tool(args_schema=WikipediaSchema)
+@async_time_logger("wikipedia_tool")
+async def wikipedia_tool(query: str) -> List[Dict[str, Any]]:
+    """
+    Wikipedia Summary Tool (Korean prioritized)
+
+    When to use:
+        - When formal and academic definitions are needed.
+        - When English summaries are automatically provided if Korean is unavailable.
+
+    Args:
+        query (str): Search keyword
+
+    Returns:
+        List[Dict[str, Any]]: List containing summarized content or error message
+    """
+    # redis 캐싱
+    r = get_redis_client()
+
+    # 한국어 우선, 실패 시 영어
+    for lang in ["ko", "en"]:
         try:
-            info = ticker.info or {}
-        except Exception:
-            info = {}
+            cache_key = f"wiki:{lang}:{query}"
+            cached = r.get(cache_key)
+            if cached:
+                return [{"content": cached}]
 
-        response.update({
-            "history": records,
-            "info": info,
-            "status": "success",
-            "message": None
-        })
+            # wiki_client로 wikipedia 모듈 전달
+            api_wrapper = WikipediaAPIWrapper(
+                wiki_client=wikipedia,       # wikipedia-api 클라이언트
+                top_k_results=2,            # 최대 2개 문서
+                doc_content_chars_max=1500, # 요약 최대 1500자
+                lang=lang                   # 언어 설정
+            )
+            wikipedia_tool = WikipediaQueryRun(
+                api_wrapper=api_wrapper,
+            )
+            result = wikipedia_tool.run(query)
+            summaries = result.split("\n")[:10]  # 최대 10줄 요약
+            content = f"Wikipedia Summary ({lang}):\n" + "\n".join(summaries) if summaries else f"No information found for '{query}' on Wikipedia ({lang})."
+            r.set(cache_key, content)
+            return [{"content": content}]
+        except Exception as e:
+            if lang == "en":  # 영어까지 실패 시
+                return [{"error": f"Wikipedia search error: {str(e)}"}]
+            continue
 
-        if len(records) <= 1:
-            return response
-
-        df_vis = pd.DataFrame(records)
-        df_vis["date"] = pd.to_datetime(df_vis["date"])
-
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df_vis["date"], y=df_vis["close"],
-            name="Close Price", mode="lines+markers",
-            line=dict(color="blue")
-        ))
-        fig.add_trace(go.Bar(
-            x=df_vis["date"], y=df_vis["volume"],
-            name="Volume", yaxis="y2",
-            marker_color="lightgray", opacity=0.5
-        ))
-
-        fig.update_layout(
-            title=f"{symbol} 주가 및 거래량",
-            xaxis=dict(title="날짜"),
-            yaxis=dict(title="종가 (원)"),
-            yaxis2=dict(title="거래량", overlaying="y", side="right"),
-            height=400,
-            font=dict(family="Noto Sans CJK KR")
-        )
-        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-
-        key = f"stocks/{slugify(symbol)}_chart.png"
-        chart_url = upload_chart_to_s3(fig, key)
-
-        response.update({
-            "chart_url": chart_url,
-            "chart_description": f"{symbol} stock price and volume chart"
-        })
-
-        return response
-
-    except Exception as e:
-        response["message"] = f"Failed to retrieve stock data: {str(e)}"
-        return response
-
-@tool(args_schema=KRStockHistorySchema)
-@async_time_logger("kr_stock_history_tool")
-async def kr_stock_history_tool(
-    symbol: str,
-    start: str,
-    end: str,
-) -> Dict[str, Any]:
-    """
-    Korean Stock OHLCV Data Retrieval Tool (FinanceDataReader)
-
-    When to use:
-        - When analyzing Korean stock prices and trading volumes.
-
-    Args:
-        symbol (str): 6-digit stock code
-        start (str): Start date (YYYY-MM-DD)
-        end (str): End date (YYYY-MM-DD)
-
-    Returns:
-        Dict:
-            - symbol (str): Stock code
-            - history (List[Dict]): List of daily data with date, open, high, low, close, volume
-            - status (str): Success or failure
-            - message (str or None): Error message if applicable
-            - chart_url (str): URL of the stock price and volume chart
-            - chart_description (str): Description of the chart
-    """
-    response = {
-        "symbol": symbol,
-        "history": [],
-        "info": {},
-        "status": "failed",
-        "message": None
-    }
-
-    if not symbol or not symbol.strip():
-        response["message"] = "Stock code is empty."
-        return response
-
-    try:
-        df = fdr.DataReader(symbol, start=start, end=end)
-
-        if df.empty:
-            response["message"] = f"No data available for stock code '{symbol}'."
-            return response
-
-        records = [{
-            "date": idx.strftime("%Y-%m-%d"),
-            "open": float(row["Open"]),
-            "high": float(row["High"]),
-            "low": float(row["Low"]),
-            "close": float(row["Close"]),
-            "volume": int(row["Volume"])
-        } for idx, row in df.iterrows()]
-
-        response.update({
-            "history": records,
-            "status": "success",
-            "message": None
-        })
-
-        if len(records) <= 1:
-            return response
-
-        df_vis = pd.DataFrame(records)
-        df_vis["date"] = pd.to_datetime(df_vis["date"])
-
-        fig = go.Figure()
-
-        fig.add_trace(go.Scatter(
-            x=df_vis["date"], y=df_vis["close"],
-            name="Close Price", mode="lines+markers",
-            line=dict(color="blue")
-        ))
-
-        fig.add_trace(go.Bar(
-            x=df_vis["date"], y=df_vis["volume"],
-            name="Volume", yaxis="y2",
-            marker_color="lightgray", opacity=0.5
-        ))
-
-        fig.update_layout(
-            title=f"{symbol} 주가 및 거래량",
-            xaxis=dict(title="날짜"),
-            yaxis=dict(title="종가 (원)"),
-            yaxis2=dict(title="거래량", overlaying="y", side="right"),
-            height=400,
-            font=dict(family="Noto Sans CJK KR")
-        )
-
-        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-
-        key = f"stocks/{slugify(symbol)}_chart.png"
-        chart_url = upload_chart_to_s3(fig, key)
-
-        response.update({
-            "chart_url": chart_url,
-            "chart_description": f"{symbol} stock price and volume chart"
-        })
-
-        return response
-
-    except Exception as e:
-        response["message"] = f"Failed to retrieve stock data: {str(e)}"
-        return response
 
 @tool(args_schema=NamuwikiSchema)
 @async_time_logger("namuwiki_tool")
@@ -1386,6 +1139,120 @@ async def namuwiki_tool(keyword: str) -> List[Dict[str, Any]]:
     except Exception as e:
         return [{"error": f"[Error] Namuwiki request failed: {str(e)}"}]
 
+
+@tool(args_schema=StockHistorySchema)
+@async_time_logger("stock_history_tool")
+async def stock_history_tool(
+    symbol: str,
+    start: str,
+    end: str,
+) -> Dict[str, Any]:
+    """
+    Unified Stock OHLCV Retrieval Tool (Global + Korean)
+
+    Args:
+        symbol (str): Stock ticker (e.g., 'AAPL') or 6-digit Korean stock code (e.g., '005930').
+        start (str): Start date in 'YYYY-MM-DD' format.
+        end (str): End date in 'YYYY-MM-DD' format.
+
+    Returns:
+        dict: {
+            symbol (str): Queried stock symbol,
+            history (list[dict]): List of daily OHLCV data (open, high, low, close, volume),
+            info (dict): Additional metadata (only for global stocks),
+            status (str): 'success' or 'failed',
+            message (str|None): Error details if failed,
+            chart_url (str): S3 URL to the generated stock chart,
+            chart_description (str): Human-readable description of the chart
+        }
+    """
+    def is_korean_symbol(sym: str) -> bool:
+        return bool(re.fullmatch(r"\d{6}", sym))
+
+    response = {
+        "symbol": symbol,
+        "history": [],
+        "info": {},
+        "status": "failed",
+        "message": None
+    }
+
+    try:
+        if is_korean_symbol(symbol):
+            df = fdr.DataReader(symbol, start=start, end=end)
+            info = {}
+        else:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(
+                start=start,
+                end=end,
+                interval="1d",
+                auto_adjust=True,
+                back_adjust=False
+            )
+            df = df.dropna(subset=["Close", "Volume"])
+            df = df[df["Volume"] > 0]
+            info = ticker.info or {}
+
+        if df.empty:
+            response["message"] = f"No valid trading records found for '{symbol}'."
+            return response
+
+        records = [{
+            "date": idx.strftime("%Y-%m-%d"),
+            "open": float(row["Open"]),
+            "high": float(row["High"]),
+            "low": float(row["Low"]),
+            "close": float(row["Close"]),
+            "volume": int(row["Volume"])
+        } for idx, row in df.iterrows()]
+
+        response.update({
+            "history": records,
+            "info": info,
+            "status": "success"
+        })
+
+        df_vis = pd.DataFrame(records)
+        df_vis["date"] = pd.to_datetime(df_vis["date"])
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df_vis["date"], y=df_vis["close"],
+            name="Close Price", mode="lines+markers",
+            line=dict(color="blue")
+        ))
+        fig.add_trace(go.Bar(
+            x=df_vis["date"], y=df_vis["volume"],
+            name="Volume", yaxis="y2",
+            marker_color="lightgray", opacity=0.5
+        ))
+
+        fig.update_layout(
+            title=f"{symbol} 주가 및 거래량",
+            xaxis=dict(title="날짜"),
+            yaxis=dict(title="종가"),
+            yaxis2=dict(title="거래량", overlaying="y", side="right"),
+            height=400,
+            font=dict(family="Noto Sans CJK KR")
+        )
+        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+
+        key = f"stocks/{slugify(symbol)}_chart.png"
+        chart_url = upload_chart_to_s3(fig, key)
+
+        response.update({
+            "chart_url": chart_url,
+            "chart_description": f"{symbol} stock price and volume chart"
+        })
+
+        return response
+
+    except Exception as e:
+        response["message"] = f"Failed to retrieve stock data: {str(e)}"
+        return response
+
+
 @tool(args_schema=Dalle3ImageGenerationSchema)
 @async_time_logger("dalle3_image_generation_tool")
 async def dalle3_image_generation_tool(prompt: str) -> List[Dict[str, Any]]:
@@ -1440,171 +1307,6 @@ async def dalle3_image_generation_tool(prompt: str) -> List[Dict[str, Any]]:
         print(f"DALL·E generation error: {str(e)}")
         return [{"error": f"Image generation failed: {str(e)}"}]
 
-@tool(args_schema=WikipediaSchema)
-@async_time_logger("weather_tool")
-async def weather_tool(
-    location: str = "Seoul,KR",
-    lang: str = "kr",
-    units: str = "metric",
-    forecast_types: str = "current,hourly,daily",
-    include_extras: bool = True,
-    today_only: bool = False
-) -> Dict[str, Union[Dict, List, str]]:
-    """
-    OpenWeatherMap API Weather Retrieval Tool
-
-    When to use:
-        - When checking current, hourly, or daily weather for a specific location.
-
-    Args:
-        location (str): City name and country code (e.g., 'Seoul,KR')
-        lang (str): Language code, defaults to 'kr'
-        units (str): Units, defaults to 'metric'
-        forecast_types (str): Combination of 'current', 'hourly', 'daily'
-        include_extras (bool): Whether to include extra information
-        today_only (bool): Whether to return only today's data
-
-    Returns:
-        Dict:
-            - current (Dict, optional): Temperature, weather, humidity, extras
-            - hourly (List[Dict], optional): Hourly forecast data
-            - daily (List[Dict], optional): Daily forecast data
-            - error (str, optional): Error message if applicable
-    """
-    # API 키 확인
-    api_key = os.getenv("OPENWEATHERMAP_API_KEY")
-    if not api_key:
-        logger.error("OPENWEATHERMAP_API_KEY environment variable is not set")
-        return {"error": "OPENWEATHERMAP_API_KEY environment variable is not set."}
-
-    # 데이터 유형 파싱
-    types = [t.strip() for t in forecast_types.split(",")]
-    if not all(t in ["current", "hourly", "daily"] for t in types):
-        logger.error(f"Invalid forecast_types: {forecast_types}")
-        return {"error": f"Invalid forecast_types: {forecast_types}. Choose from 'current', 'hourly', 'daily'."}
-
-    # 공통 파라미터
-    params = {
-        "q": location,
-        "appid": api_key,
-        "lang": lang,
-        "units": units
-    }
-
-    result = {}
-    try:
-        async with aiohttp.ClientSession() as session:
-            # 현재 날씨
-            if "current" in types:
-                current_url = "https://api.openweathermap.org/data/2.5/weather"
-                async with session.get(current_url, params=params) as response:
-                    if response.status != 200:
-                        error_msg = f"Current weather API call failed: {response.status} - {await response.text()}"
-                        logger.error(error_msg)
-                        return {"error": error_msg}
-                    current_data = await response.json()
-
-                current_temp = current_data["main"]["temp"]
-                current_formatted_temp = f"Below zero {-current_temp}°C" if current_temp < 0 else f"{current_temp}°C"
-                result["current"] = {
-                    "temp": current_formatted_temp,
-                    "weather": current_data["weather"][0]["description"],
-                    "humidity": current_data["main"]["humidity"]
-                }
-                if include_extras:
-                    result["current"]["extras"] = {
-                        "feels_like": f"Below zero {-current_data['main']['feels_like']}°C" if current_data["main"]["feels_like"] < 0 else f"{current_data['main']['feels_like']}°C",
-                        "wind_speed": f"{current_data['wind']['speed']} m/s",
-                        "pressure": f"{current_data['main']['pressure']} hPa",
-                        "precipitation": f"{current_data.get('rain', {}).get('1h', 0)} mm"
-                    }
-
-            # 시간별 및 일별 예보
-            if "hourly" in types or "daily" in types:
-                forecast_url = "https://api.openweathermap.org/data/2.5/forecast"
-                async with session.get(forecast_url, params=params) as response:
-                    if response.status != 200:
-                        error_msg = f"Forecast API call failed: {response.status} - {await response.text()}"
-                        logger.error(error_msg)
-                        return {"error": error_msg}
-                    forecast_data = await response.json()
-
-                # 시간별 예보 (3시간 간격)
-                if "hourly" in types:
-                    forecast_list = []
-                    today = datetime.now().strftime("%Y-%m-%d") if today_only else None
-                    for item in forecast_data["list"]:
-                        forecast_time = datetime.fromtimestamp(item["dt"]).strftime("%Y-%m-%d %H:00")
-                        if today_only and not forecast_time.startswith(today):
-                            continue
-                        forecast_temp = item["main"]["temp"]
-                        forecast_formatted_temp = f"Below zero {-forecast_temp}°C" if forecast_temp < 0 else f"{forecast_temp}°C"
-                        forecast_item = {
-                            "time": forecast_time,
-                            "temp": forecast_formatted_temp,
-                            "weather": item["weather"][0]["description"]
-                        }
-                        if include_extras:
-                            forecast_item["extras"] = {
-                                "feels_like": f"Below zero {-item['main']['feels_like']}°C" if item["main"]["feels_like"] < 0 else f"{item['main']['feels_like']}°C",
-                                "wind_speed": f"{item['wind']['speed']} m/s",
-                                "precipitation": f"{item.get('pop', 0) * 100}%",
-                                "pressure": f"{item['main']['pressure']} hPa"
-                            }
-                        forecast_list.append(forecast_item)
-                    result["hourly"] = forecast_list
-
-                # 일별 예보
-                if "daily" in types:
-                    daily_dict = {}
-                    today = datetime.now().strftime("%Y-%m-%d") if today_only else None
-                    for item in forecast_data["list"]:
-                        date = datetime.fromtimestamp(item["dt"]).strftime("%Y-%m-%d")
-                        if today_only and date != today:
-                            continue
-                        if date not in daily_dict:
-                            daily_dict[date] = {
-                                "temps": [],
-                                "weathers": [],
-                                "pops": [],
-                                "winds": []
-                            }
-                        daily_dict[date]["temps"].append(item["main"]["temp"])
-                        daily_dict[date]["weathers"].append(item["weather"][0]["description"])
-                        daily_dict[date]["pops"].append(item.get("pop", 0) * 100)
-                        daily_dict[date]["winds"].append(item["wind"]["speed"])
-
-                    daily_list = []
-                    for date, data in daily_dict.items():
-                        temp_max = max(data["temps"])
-                        temp_min = min(data["temps"])
-                        weather_counts = {}
-                        for w in data["weathers"]:
-                            weather_counts[w] = weather_counts.get(w, 0) + 1
-                        main_weather = max(weather_counts, key=weather_counts.get)
-                        daily_item = {
-                            "date": date,
-                            "temp_max": f"Below zero {-temp_max}°C" if temp_max < 0 else f"{temp_max}°C",
-                            "temp_min": f"Below zero {-temp_min}°C" if temp_min < 0 else f"{temp_min}°C",
-                            "weather": main_weather
-                        }
-                        if include_extras:
-                            daily_item["extras"] = {
-                                "precipitation": f"{sum(data['pops']) / len(data['pops'])}%",
-                                "wind_speed": f"{sum(data['winds']) / len(data['winds'])} m/s"
-                            }
-                        daily_list.append(daily_item)
-                    result["daily"] = daily_list
-
-        logger.info(f"Weather data retrieval completed for {location}: {forecast_types}")
-        return result
-
-    except aiohttp.ClientError as e:
-        logger.error(f"Network error during API call: {str(e)}")
-        return {"error": f"Network error: {str(e)}"}
-    except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        return {"error": f"Error occurred: {str(e)}"}
 
 @tool(args_schema=PaperSearchSchema)
 @async_time_logger("paper_search_tool")
@@ -1702,21 +1404,20 @@ async def paper_search_tool(
         logger.error(f"ArXiv search failed: {str(e)}")
         return {"error": f"Paper search failed: {str(e)}"}
 
+
 tools = [
+    web_search_tool,
     domestic_it_news_search_tool,
     foreign_news_search_tool,
+    global_it_news_trend_report_tool,
+    it_news_trend_keyword_tool,
+    google_trends_tool,
     community_search_tool,
-    web_search_tool,
     youtube_video_tool,
     request_url_tool,
     wikipedia_tool,
-    google_trends_tool,
-    generate_news_trend_report_tool,
-    it_news_trend_keyword_tool,
     namuwiki_tool,
     stock_history_tool,
     dalle3_image_generation_tool,
-    kr_stock_history_tool,
-    weather_tool,
     paper_search_tool
 ]
