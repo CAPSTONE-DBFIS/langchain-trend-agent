@@ -951,7 +951,7 @@ async def community_search_tool(
         korean_keyword (str): Korean keyword for search
         english_keyword (str): English keyword for search
         platform (str): 'all', 'daum', 'naver', 'reddit', 'x'
-        max_results (int): Maximum number of results (default: 40)
+        max_results (int): Maximum number of results (default: 20)
 
     Returns:
         Dict[str, Any]:
