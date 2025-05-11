@@ -1091,7 +1091,8 @@ async def web_search_tool(keyword: str, max_results: int=10) -> List[Dict[str, s
     """
     try:
         tavily_tool = TavilySearch(
-            max_results=max_results
+            max_results=max_results,
+            include_images=True
         )
         result = await tavily_tool.ainvoke({"query": keyword})
         logger.info(f"Tavily search result: {result}")
