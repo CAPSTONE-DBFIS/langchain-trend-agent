@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Annotated
 
 class DomesticITNewsSearchSchema(BaseModel):
     keyword: str = Field(..., description="Primary keyword for search")
@@ -15,8 +15,8 @@ class ForeignNewsSearchSchema(BaseModel):
 class CommunitySearchSchema(BaseModel):
     korean_keyword: str = Field(..., description="Korean keyword for search")
     english_keyword: str = Field(..., description="English keyword for search")
-    platform: str = Field("all", description="Platform: 'all', 'daum', 'naver', or 'reddit'")
-    max_results: int = Field(10, description="Maximum number of results")
+    platform: str = Field("all", description="Platform: 'all', 'daum', 'naver', 'reddit', 'x'")
+    max_results: int = Field(20, description="Maximum number of results (default 20)")
 
 class SearchWebSchema(BaseModel):
     keyword: str = Field(..., description="Search keyword")
