@@ -3,8 +3,6 @@ import fitz
 import docx
 import olefile
 from io import BytesIO
-from PIL import Image, ImageEnhance, ImageOps
-import pytesseract
 import subprocess
 import tempfile
 import os
@@ -45,8 +43,6 @@ def extract_text_by_filename(uploader_id: str, filename: str) -> str:
         return extract_hwp(contents)
     elif filename_lower.endswith(".txt"):
         return extract_txt(contents)
-    elif filename_lower.endswith((".png", ".jpg", ".jpeg")):
-        return extract_image(contents)
     else:
         raise Exception("지원하지 않는 파일 형식입니다.")
 
@@ -111,31 +107,3 @@ def extract_txt(contents: bytes) -> str:
     except Exception as e:
         print(f"[ERROR] TXT 텍스트 추출 오류: {e}")
         return ""
-
-
-def extract_image(contents: bytes) -> str:
-    """이미지 파일에서 텍스트를 OCR로 추출"""
-    try:
-        image = Image.open(BytesIO(contents))
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-
-        # 전처리: 기울기 보정, 이진화
-        image = ImageOps.autocontrast(image)
-        image = image.convert("L")
-        image = image.point(lambda x: 0 if x < 128 else 255, mode="1")
-
-        # 해상도 개선
-        width, height = image.size
-        if width < 1000 or height < 1000:
-            new_width = max(1000, width * 2)
-            new_height = max(1000, height * 2)
-            image = image.resize((new_width, new_height), Image.LANCZOS)
-
-        # 텍스트 추출
-        text = pytesseract.image_to_string(image, lang='kor+eng', config='--psm 3 --oem 1')
-        return text.strip()
-    except Exception as e:
-        print(f"[ERROR] 이미지 텍스트 추출 오류: {e}")
-        return ""
-

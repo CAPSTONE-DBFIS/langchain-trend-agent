@@ -44,6 +44,7 @@ from requests.auth import HTTPBasicAuth
 from unidecode import unidecode
 from zoneinfo import ZoneInfo
 import arxiv
+from twikit import Client
 
 from app.utils.db_util import get_db_connection
 from app.utils.redis_util import get_redis_client
@@ -473,9 +474,7 @@ async def global_it_news_trend_report_tool(date_start=None, date_end=None):
             ]
         elif system == "Linux":
             candidates = [
-                "/usr/share/fonts/noto/NotoSansCJKkr-Regular.otf",
-                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
+                "/usr/share/fonts/noto/NotoSansCJKkr-Regular.otf"
             ]
         elif system == "Windows":
             candidates = [
@@ -492,10 +491,15 @@ async def global_it_news_trend_report_tool(date_start=None, date_end=None):
                 break
 
         if font_path:
+            fm.fontManager.addfont(font_path)
             font_prop = fm.FontProperties(fname=font_path)
-            plt.rcParams['font.family'] = font_prop.get_name()
+            font_name = font_prop.get_name()
+            plt.rcParams['font.family'] = font_name
+            print(f"[DEBUG] 적용된 폰트: {font_name} @ {font_path}")
         else:
             plt.rcParams['font.family'] = 'Arial'
+            print("[DEBUG] 폰트 파일 없음, Arial 사용됨")
+
         plt.rcParams['axes.unicode_minus'] = False
 
         plt.figure(figsize=(8, 5))
@@ -503,7 +507,7 @@ async def global_it_news_trend_report_tool(date_start=None, date_end=None):
         plt.title(f"{date_start} ~ {date_end} {title_prefix} 키워드 빈도")
         for bar in bars:
             yval = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2, yval + 0.2, int(yval), ha='center')
+            plt.text(bar.get_x() + bar.get_width() / 2, yval + 0.2, int(yval), ha='center')
         base_dir = os.path.abspath("./data/reports")
         os.makedirs(base_dir, exist_ok=True)
         filename = f"{title_prefix}_keywords_{date_start}_{date_end}_{uuid4().hex[:6]}.png"
@@ -841,25 +845,113 @@ async def search_reddit_posts(keyword: str, max_result: int = 10) -> List[Dict[s
         raise RuntimeError(f"Reddit search error: {str(e)}")
 
 
+@async_time_logger("search_x_tweets")
+async def search_x_tweets(keyword: str, max_results: int = 10, min_faves: int = 10) -> List[Dict[str, Any]]:
+    logger.info(f"[X] search_x_tweets 호출됨 | keyword: {keyword}, max_results: {max_results}, min_faves: {min_faves}")
+
+    KST = timezone(timedelta(hours=9))
+    SPAM_WORDS = ["무료", "프로모션", "클릭", "구독", "이벤트", "광고", "free", "click", "promo", "win"]
+
+    load_dotenv()
+    username = os.getenv("X_USERNAME")
+    email = os.getenv("X_EMAIL")
+    password = os.getenv("X_PASSWORD")
+    cookies_file = "twitter_cookies.json"
+
+    if not all([username, email, password]):
+        logger.error("[X] 인증 정보 누락: .env 확인")
+        return [{"source": "x", "error": "X_USERNAME, X_EMAIL, 또는 X_PASSWORD 환경 변수가 설정되지 않았습니다."}]
+
+    max_results = max(10, min(max_results, 100))
+
+    try:
+        client = Client(language="ko-KR")
+
+        if os.path.exists(cookies_file):
+            try:
+                client.load_cookies(cookies_file)
+                logger.info("[X] 쿠키 로드 완료, 유효성 검사 중...")
+                await client.get_user_by_screen_name(username)
+            except Exception as e:
+                logger.warning(f"[X] 쿠키 유효하지 않음. 재로그인 시도: {e}")
+                await client.login(auth_info_1=username, auth_info_2=email, password=password)
+                await client.get_user_by_screen_name(username)
+                client.save_cookies(cookies_file)
+        else:
+            logger.info("[X] 쿠키 없음. 로그인 시도")
+            await client.login(auth_info_1=username, auth_info_2=email, password=password)
+            await client.get_user_by_screen_name(username)
+            client.save_cookies(cookies_file)
+
+        query = f"{keyword} -filter:replies" if min_faves == 0 else f"{keyword} -filter:replies min_faves:{min_faves}"
+        logger.info(f"[X] 트윗 검색 쿼리: {query}")
+
+        tweets = await client.search_tweet(query=query, product="Latest")
+        logger.info(f"[X] 원본 트윗 수: {len(tweets)}")
+
+        tweet_list = []
+        for tweet in tweets:
+            text = tweet.text.strip()
+            if len(text) <= 20: continue
+            if any(spam_word.lower() in text.lower() for spam_word in SPAM_WORDS): continue
+            if text.count("#") > 5: continue
+            if tweet.user.followers_count < 100: continue
+
+            tweet_list.append({
+                "id": tweet.id,
+                "text": text,
+                "created_at": parser.parse(tweet.created_at),
+                "url": f"https://x.com/i/status/{tweet.id}"
+            })
+
+        logger.info(f"[X] 필터링 후 트윗 수: {len(tweet_list)}")
+
+        tweet_list.sort(key=lambda x: x["created_at"], reverse=True)
+
+        results = [
+            {
+                "title": f"트윗 ID: {tweet['id']}",
+                "url": tweet['url'],
+                "content": tweet['text'][:500],
+                "datetime": tweet['created_at'].astimezone(KST).strftime("%Y-%m-%d %H:%M"),
+                "source": "x"
+            }
+            for tweet in tweet_list[:max_results]
+        ]
+
+        logger.info(f"[X] 최종 반환 결과 수: {len(results)}")
+
+        if not results:
+            logger.warning(f"[X] '{keyword}'에 대한 결과 없음")
+            return []
+
+        await asyncio.sleep(5)
+        return results
+
+    except Exception as e:
+        logger.error(f"[X] 트윗 검색 오류: {str(e)}")
+        return [{"source": "x", "error": f"트윗 검색 실패: {str(e)}"}]
+
+
 @tool(args_schema=CommunitySearchSchema)
 @async_time_logger("community_search_tool")
 async def community_search_tool(
     korean_keyword: str,
     english_keyword: str,
     platform: str = "all",
-    max_results: int = 10
+    max_results: int = 20
 ) -> Dict[str, Any]:
     """
-    Blog and Community Post Search Tool
+    Blog(Naver, Daum) and Community(Reddit, X) Post Search Tool
 
     When to use:
-        - When analyzing public sentiment on blogs or platforms like Reddit.
+        - When analyzing public sentiment on blogs or Social Network platforms.
 
     Args:
         korean_keyword (str): Korean keyword for search
         english_keyword (str): English keyword for search
-        platform (str): 'all', 'daum', 'naver', or 'reddit'
-        max_results (int): Maximum number of results
+        platform (str): 'all', 'daum', 'naver', 'reddit', 'x'
+        max_results (int): Maximum number of results (default: 40)
 
     Returns:
         Dict[str, Any]:
@@ -867,26 +959,71 @@ async def community_search_tool(
             - english_keyword (str): English keyword
             - platform (str): Platform used
             - results (List[Dict]): List of posts with title, url, content, datetime, source
+            - errors (List[Dict]): List of errors from platforms
     """
+    # 플랫폼별 max_results 제한 (최대 20개)
+    platform_max_results = min(max_results // 2, 20)
+
     tasks = []
     if platform in ["all", "daum"]:
-        tasks.append(search_daum_blogs(korean_keyword, max_results))
+        tasks.append(search_daum_blogs(korean_keyword, platform_max_results))
     if platform in ["all", "naver"]:
-        tasks.append(search_naver_blogs(korean_keyword, max_results))
+        tasks.append(search_naver_blogs(korean_keyword, platform_max_results))
     if platform in ["all", "reddit"]:
-        tasks.append(search_reddit_posts(english_keyword, max_results))
+        tasks.append(search_reddit_posts(english_keyword, platform_max_results))
+    if platform in ["all", "x"]:
+        tasks.append(search_x_tweets(english_keyword, platform_max_results))
 
-    results_nested = await asyncio.gather(*tasks)
-    results = [item for sublist in results_nested for item in sublist]
+    results_nested = await asyncio.gather(*tasks, return_exceptions=True)
+    results = []
+    errors = []
+
+    for sublist in results_nested:
+        if isinstance(sublist, Exception):
+            errors.append({"source": "unknown", "error": str(sublist)})
+            continue
+        for item in sublist:
+            if "error" in item:
+                errors.append(item)
+            else:
+                results.append(item)
 
     # 최신순 정렬
-    results_sorted = sorted(results, key=lambda x: x["datetime"], reverse=True)
+    results_sorted = sorted(
+        results,
+        key=lambda x: x["datetime"] if isinstance(x["datetime"], datetime) else parser.parse(x["datetime"]),
+        reverse=True
+    )
+
+    if platform != "all":
+        return {
+            "korean_keyword": korean_keyword,
+            "english_keyword": english_keyword,
+            "platform": platform,
+            "results": results_sorted[:max_results],
+            "errors": errors
+        }
+
+    # platform == "all"인 경우 균등 분배
+    platforms = set(post["source"] for post in results_sorted)
+    per_platform = max_results // max(len(platforms), 1)
+
+    balanced_results = []
+    for plat in platforms:
+        posts = [post for post in results_sorted if post["source"] == plat][:per_platform]
+        balanced_results.extend(posts)
+
+    # 부족한 경우 남은 거 채우기
+    remaining = [post for post in results_sorted if post not in balanced_results]
+    needed = max_results - len(balanced_results)
+    balanced_results.extend(remaining[:needed])
 
     return {
         "korean_keyword": korean_keyword,
         "english_keyword": english_keyword,
         "platform": platform,
-        "results": results_sorted[:max_results]
+        "results": balanced_results[:max_results],
+        "errors": errors
     }
 
 
