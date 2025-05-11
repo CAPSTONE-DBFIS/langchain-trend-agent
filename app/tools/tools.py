@@ -1445,29 +1445,28 @@ async def dalle3_image_generation_tool(prompt: str) -> List[Dict[str, Any]]:
         print(f"DALL·E generation error: {str(e)}")
         return [{"error": f"Image generation failed: {str(e)}"}]
 
-
 @tool(args_schema=PaperSearchSchema)
 @async_time_logger("paper_search_tool")
 async def paper_search_tool(
         query: str,
-        max_results: int = 5,
+        max_results: int = 10,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         sort_by: str = "relevance"
 ) -> Dict[str, Any]:
     """
-    ArXiv Academic Paper Search Tool
+    OpenAlex Academic Paper Search Tool
 
     When to use:
-        - When exploring recent or popular academic papers on a specific topic.
-        - When retrieving paper titles, abstracts, and URLs based on keywords.
+        - When exploring academic papers across all disciplines (including arXiv, journals, etc.).
+        - When retrieving paper titles, abstracts, URLs, authors, and metadata.
 
     Args:
         query (str): Search keyword
-        max_results (int): Maximum number of papers to return (default 5, max 10)
-        start_date (str, optional): Search start date (YYYY-MM-DD)
-        end_date (str, optional): Search end date (YYYY-MM-DD)
-        sort_by (str): Sort by 'date' or 'relevance'
+        max_results (int): Maximum number of papers to return (default 10, max 10)
+        start_date (str, optional): Search start date (YYYY-MM-DD) (default 90 days ago)
+        end_date (str, optional): Search end date (YYYY-MM-DD) (default today)
+        sort_by (str): Sort by 'relevance' or 'date'
 
     Returns:
         Dict[str, Any]:
@@ -1475,50 +1474,55 @@ async def paper_search_tool(
             - results (List[Dict]): List of papers with title, abstract, published_date, url, authors
             - error (str, optional): Error message if applicable
     """
+    # 기본 날짜 설정
+    if start_date is None:
+        start_date = (datetime.today() - timedelta(days=90)).strftime("%Y-%m-%d")
+    if end_date is None:
+        end_date = datetime.today().strftime("%Y-%m-%d")
+
     # 캐시 키 생성
-    cache_key = f"paper:arxiv:{query}:{max_results}:{start_date or ''}:{end_date or ''}:{sort_by}"
+    cache_key = f"paper:openalex:{query}:{max_results}:{start_date or ''}:{end_date or ''}:{sort_by}"
     r = get_redis_client()
     if cached := r.get(cache_key):
         return json.loads(cached)
 
-    # 정렬 기준 설정
-    if sort_by == "relevance":
-        sort_criterion = arxiv.SortCriterion.Relevance
-    elif sort_by == "date":
-        sort_criterion = arxiv.SortCriterion.SubmittedDate
-    else:
-        return {"error": "sort_by must be 'date' or 'relevance'."}
+    # 정렬 및 필터 설정
+    filter_params = [f"title.search:{query.replace(' ', '%20')}"]
+    if start_date:
+        filter_params.append(f"from_publication_date:{start_date}")
+    if end_date:
+        filter_params.append(f"to_publication_date:{end_date}")
 
-    # ArXiv 검색 클라이언트 초기화
-    client = arxiv.Client()
+    sort_param = "relevance_score:desc" if sort_by == "relevance" else "publication_date:desc"
+    if max_results > 10:
+        max_results = 10  # OpenAlex 페이지당 최대 25, 여기서는 10으로 제한
+
+    # OpenAlex API URL
+    base_url = "https://api.openalex.org/works"
+    query_url = f"{base_url}?filter={','.join(filter_params)}&sort={sort_param}&per_page={max_results}"
 
     try:
-        # 검색 쿼리 구성
-        search_query = query
-        search = arxiv.Search(
-            query=search_query,
-            max_results=max_results,
-            sort_by=sort_criterion,
-            sort_order=arxiv.SortOrder.Descending
-        )
+        # API 요청
+        response = requests.get(query_url)
+        response.raise_for_status()
+        data = response.json()
 
         # 결과 수집
         results = []
-        for paper in client.results(search):
-            published_date = paper.published.strftime("%Y-%m-%d")
-
-            # 날짜 필터링
-            if start_date and published_date < start_date:
-                continue
-            if end_date and published_date > end_date:
-                continue
+        for paper in data.get("results", []):
+            published_date = paper.get("publication_date", "N/A")
+            abstract = paper.get("abstract") or paper.get("abstract_inverted_index")
+            if isinstance(abstract, dict):
+                abstract = " ".join(word for word, _ in abstract.items())[:1000]
+            elif not abstract:
+                abstract = "No abstract available."
 
             results.append({
-                "title": paper.title,
-                "abstract": paper.summary.strip()[:1000],
+                "title": paper.get("title", "No title"),
+                "abstract": abstract.strip()[:1000],
                 "published_date": published_date,
-                "url": paper.entry_id,
-                "authors": [author.name for author in paper.authors]
+                "url": paper.get("primary_location", {}).get("landing_page_url", paper.get("id")),
+                "authors": [author["author"]["display_name"] for author in paper.get("authorships", [])]
             })
 
         # 결과가 없거나 필터링 후 비어 있는 경우
@@ -1539,7 +1543,7 @@ async def paper_search_tool(
         return result
 
     except Exception as e:
-        logger.error(f"ArXiv search failed: {str(e)}")
+        logger.error(f"OpenAlex search failed: {str(e)}")
         return {"error": f"Paper search failed: {str(e)}"}
 
 

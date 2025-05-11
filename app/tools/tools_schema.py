@@ -58,7 +58,7 @@ class Dalle3ImageGenerationSchema(BaseModel):
 
 class PaperSearchSchema(BaseModel):
     query: str = Field(..., description="English keyword for paper search")
-    max_results: int = Field(default=5, description="Maximum number of papers to return (1-10)", ge=1, le=10)
-    start_date: Optional[str] = Field(None, description="Search start date (YYYY-MM-DD)")
-    end_date: Optional[str] = Field(None, description="Search end date (YYYY-MM-DD)")
+    max_results: int = Field(default=10, description="Maximum number of papers to return (default 10)", ge=1, le=10)
+    start_date: Optional[str] = Field(None, description="Search start date (YYYY-MM-DD) (default 90 days ago)")
+    end_date: Optional[str] = Field(None, description="Search end date (YYYY-MM-DD) (default today)")
     sort_by: str = Field(default="relevance", description="Sort by: 'date' (newest) or 'relevance' (most relevant)")
