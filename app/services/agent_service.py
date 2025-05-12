@@ -62,20 +62,20 @@ class AgentChatService:
     ]
 
     TOOL_NAME_MAP = {
-        "domestic_it_news_search_tool": "국내 뉴스 검색 중...",
-        "foreign_news_search_tool": "해외 뉴스 검색 중...",
-        "community_search_tool": "커뮤니티 게시물 검색 중...",
-        "web_search_tool": "웹 검색 중...",
-        "youtube_video_tool": "YouTube 정보 검색 중...",
-        "request_url_tool": "웹페이지 분석 중...",
-        "it_news_trend_keyword_tool": "국내 뉴스 트렌드 키워드 분석 중...",
-        "google_trends_tool": "구글 트렌드 분석 중...",
-        "wikipedia_tool": "위키피디아 검색 중...",
-        "namuwiki_tool": "나무위키 검색 중...",
-        "stock_history_tool": "주식 데이터 조회 중...",
-        "global_it_news_trend_report_tool": "글로벌 뉴스 트렌드 보고서 생성 중...",
-        "paper_search_tool": "논문 검색 중...",
-        "dalle3_image_generation_tool": "이미지 생성 중 ..."
+        "domestic_it_news_search_tool": "국내 뉴스 검색 중",
+        "foreign_news_search_tool": "해외 뉴스 검색 중",
+        "community_search_tool": "커뮤니티 게시물 검색 중",
+        "web_search_tool": "웹 검색 중",
+        "youtube_video_tool": "YouTube 정보 검색 중",
+        "request_url_tool": "웹페이지 분석 중",
+        "it_news_trend_keyword_tool": "국내 뉴스 트렌드 키워드 분석 중",
+        "google_trends_tool": "구글 트렌드 분석 중",
+        "wikipedia_tool": "위키피디아 검색 중",
+        "namuwiki_tool": "나무위키 검색 중",
+        "stock_history_tool": "주식 데이터 조회 중",
+        "global_it_news_trend_report_tool": "글로벌 뉴스 트렌드 보고서 생성 중",
+        "paper_search_tool": "논문 검색 중",
+        "dalle3_image_generation_tool": "이미지 생성 중"
     }
 
     # 도구별 출력 키 매핑
