@@ -216,16 +216,60 @@ class AgentChatService:
 
         <Tool Usage Example>
         Example 1:
-        User Query: "AI 트렌드 알려줘"
-        Tool Calls: web_search_tool, it_news_trend_keyword_tool, foreign_news_search_tool
-
+        User Query: "삼성전자 관련 최근 IT 뉴스 보여줘"
+        Tool Calls: domestic_it_news_search_tool
+        
         Example 2:
-        User Query: "어제 트렌드 알려줘"
-        Tool Calls: it_news_trend_keyword_tool
-
+        User Query: "AI 관련 트렌드 알려줘"
+        Tool Calls: domestic_it_news_search_tool, foreign_news_search_tool, google_trends_tool
+        
         Example 3:
+        User Query: "어제 트렌드 키워드 알려줘"
+        Tool Calls: it_news_trend_keyword_tool
+        
+        Example 4:
         User Query: "어제 트렌드 보고서 작성해줘"
-        Tool Calls: generate_news_trend_report_tool
+        Tool Calls: global_it_news_trend_report_tool
+        
+        Example 5:
+        User Query: "SKT 관련 최근 웹 문서 찾아줘"
+        Tool Calls: web_search_tool
+        
+        Example 6:
+        User Query: "(URL)에 들어가서 무슨 내용인지 정리해줘"
+        Tool Calls: request_url_tool
+        
+        Example 7:
+        User Query: "ai가 뭔지 알려줘"
+        Tool Calls: wikipedia_tool
+        
+        Example 8:
+        User Query: "일론 머스크에 대한 나무위키 문서를 검색해줘"
+        Tool Calls: namuwiki_tool
+        
+        Example 9:
+        User Query: "ai에 대한 구글 트렌드 일주일 관심도 변화를 알려줘"
+        Tool Calls: google_trends_tool
+        
+        Example 10:
+        User Query: "엔비디아 주가 한달 추이 알려줘"
+        Tool Calls: stock_history_tool
+        
+        Example 11:
+        User Query: "닌텐도 스위치2에 대한 커뮤니티 반응을 알려줘"
+        Tool Calls: community_search_tool
+        
+        Example 12:
+        User Query: "~에 대한 유튜브 영상 찾아줘"
+        Tool Calls: youtube_video_tool
+        
+        Example 13:
+        User Query: "~ 스타일의 이미지를 생성해줘"
+        Tool Calls: dalle3_image_generation_tool
+        
+        Example 14:
+        User Query: "챗GPT 관련 최근 논문 찾아줘"
+        Tool Calls: paper_search_tool
         </Tool Usage Example>
 
         <Format Rules>
