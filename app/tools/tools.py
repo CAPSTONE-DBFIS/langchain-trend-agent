@@ -43,7 +43,6 @@ from pypdf import PdfReader
 from requests.auth import HTTPBasicAuth
 from unidecode import unidecode
 from zoneinfo import ZoneInfo
-import arxiv
 from twikit import Client
 
 from app.utils.db_util import get_db_connection
@@ -296,7 +295,7 @@ async def it_news_trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any
 
     elif period == "weekly":
         date_end = date
-        date_start = (datetime.fromisoformat(date) - timedelta(days=6)).strftime("%Y-%m-%d")
+        date_start = (datetime.fromisoformat(date) - timedelta(days=7)).strftime("%Y-%m-%d")
 
     elif period == "monthly":
         date_end = date
@@ -364,7 +363,7 @@ async def it_news_trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any
     tasks = {}
     for kw in keywords:
         tasks[kw] = {
-            "domestic": asyncio.create_task(fetch_domestic_articles(kw, date_start, date_end, size=3)),
+            "domestic": asyncio.create_task(fetch_domestic_articles(kw, date_start, date_end)),
             "sentiment": asyncio.create_task(fetch_sentiment_distribution(kw, date_start, date_end))
         }
 
@@ -377,7 +376,7 @@ async def it_news_trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any
             "keyword": kw,
             "frequency": keyword_frequencies[kw],
             "sentiment_percent": sent,
-            "articles": dom[:3],
+            "articles": dom,
         })
 
     result = {

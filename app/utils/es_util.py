@@ -90,7 +90,7 @@ async def fetch_foreign_articles(
         date_start: str,
         date_end: str,
         index: str = os.getenv("ELASTICSEARCH_FOREIGN_INDEX_NAME"),
-        size: int = 3
+        size: int = 5
 ) -> List[Dict[str, Any]]:
     """
     Elasticsearch에서 해외 키워드와 날짜 범위로 기사를 검색합니다.
