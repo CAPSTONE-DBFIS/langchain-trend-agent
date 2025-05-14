@@ -99,21 +99,21 @@ def save_chat_to_db(query: str, response: str, chat_room_id: str, member_id: str
         print(f"[ERROR] Failed to save chat message: {str(e)}")
 
 
-async def update_chatroom_name_if_first(chat_room_id: int, member_id: str, new_name: str):
+async def update_chatroom_name_if_first(chat_room_id: int, new_name: str):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
         cur.execute("""
             SELECT name FROM chat_room 
-            WHERE id = %s AND member_id = %s
-        """, (chat_room_id, member_id))
+            WHERE id = %s
+        """, (chat_room_id,))
         row = cur.fetchone()
 
-        if row and (row[0] is None or row[0].strip() in "새 채팅방"):
+        if row and (row[0] is None or row[0].strip() in ["", "새 채팅방", "새 팀 채팅방"]):
             cur.execute("""
-                UPDATE chat_room SET name = %s WHERE id = %s AND member_id = %s
-            """, (new_name, chat_room_id, member_id))
+                UPDATE chat_room SET name = %s WHERE id = %s
+            """, (new_name, chat_room_id))
             conn.commit()
 
         cur.close()

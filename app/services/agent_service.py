@@ -165,7 +165,7 @@ class AgentChatService:
             async def summarize_and_rename():
                 try:
                     summarized_title = await AgentChatService.summarize_query_to_title(query)
-                    await update_chatroom_name_if_first(chat_room_id, member_id, summarized_title)
+                    await update_chatroom_name_if_first(chat_room_id, summarized_title)
                 except Exception as e:
                     logger.warning(f"[채팅방 이름 변경 실패] {e}")
 
@@ -253,7 +253,7 @@ class AgentChatService:
         
         Example 10:
         User Query: "엔비디아 주가 한달 추이 알려줘"
-        Tool Calls: stock_history_tool
+        Tool Calls: stock_history_tool, foreign_news_search_tool
         
         Example 11:
         User Query: "닌텐도 스위치2에 대한 커뮤니티 반응을 알려줘"
