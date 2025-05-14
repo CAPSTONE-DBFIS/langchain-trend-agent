@@ -6,16 +6,9 @@ import asyncio
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
-
 load_dotenv()
 
 def get_es_client() -> Elasticsearch | None:
-    """
-    Elasticsearch 클라이언트를 초기화하고 반환합니다.
-
-    Returns:
-        Elasticsearch | None: 초기화된 클라이언트 또는 연결 실패 시 None
-    """
     try:
         es = Elasticsearch(
             hosts=[f"http://{os.getenv('ELASTICSEARCH_HOST')}:{os.getenv('ELASTICSEARCH_PORT')}"],
@@ -29,25 +22,12 @@ def get_es_client() -> Elasticsearch | None:
 
 
 async def fetch_domestic_articles(
-        keyword: str,
-        date_start: str,
-        date_end: str,
-        index: str = os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME"),
-        size: int = 5
+    keyword: str,
+    date_start: str,
+    date_end: str,
+    index: str = os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME"),
+    size: int = 5
 ) -> List[Dict[str, Any]]:
-    """
-    Elasticsearch에서 키워드와 날짜 범위로 기사를 검색합니다.
-
-    Args:
-        keyword (str): 검색 키워드
-        date_start (str): 검색 시작 날짜 (YYYY-MM-DD)
-        date_end (str): 검색 종료 날짜 (YYYY-MM-DD)
-        index (str): 검색할 인덱스 이름
-        size (int): 반환할 최대 기사 수
-
-    Returns:
-        List[Dict[str, Any]]: 검색된 기사 목록
-    """
     es = get_es_client()
     if es is None:
         logger.warning("Elasticsearch 클라이언트가 초기화되지 않음")
@@ -58,7 +38,12 @@ async def fetch_domestic_articles(
             "query": {
                 "bool": {
                     "must": [
-                        {"match": {"title": keyword}},
+                        {
+                            "query_string": {
+                                "query": f"*{keyword}*",
+                                "fields": ["title"]
+                            }
+                        },
                         {"range": {"date": {"gte": date_start, "lte": date_end}}}
                     ]
                 }
@@ -86,25 +71,12 @@ async def fetch_domestic_articles(
 
 
 async def fetch_foreign_articles(
-        keyword: str,
-        date_start: str,
-        date_end: str,
-        index: str = os.getenv("ELASTICSEARCH_FOREIGN_INDEX_NAME"),
-        size: int = 5
+    keyword: str,
+    date_start: str,
+    date_end: str,
+    index: str = os.getenv("ELASTICSEARCH_FOREIGN_INDEX_NAME"),
+    size: int = 5
 ) -> List[Dict[str, Any]]:
-    """
-    Elasticsearch에서 해외 키워드와 날짜 범위로 기사를 검색합니다.
-
-    Args:
-        keyword (str): 검색 키워드
-        date_start (str): 검색 시작 날짜 (YYYY-MM-DD)
-        date_end (str): 검색 종료 날짜 (YYYY-MM-DD)
-        index (str): 검색할 인덱스 이름
-        size (int): 반환할 최대 기사 수
-
-    Returns:
-        List[Dict[str, Any]]: 검색된 기사 목록
-    """
     es = get_es_client()
     if es is None:
         logger.warning("Elasticsearch 클라이언트가 초기화되지 않음")
@@ -115,7 +87,12 @@ async def fetch_foreign_articles(
             "query": {
                 "bool": {
                     "must": [
-                        {"wildcard": {"title.keyword": f"*{keyword}*"}},
+                        {
+                            "query_string": {
+                                "query": f"*{keyword}*",
+                                "fields": ["title"]
+                            }
+                        },
                         {"range": {"date": {"gte": date_start, "lte": date_end}}}
                     ]
                 }
@@ -141,25 +118,13 @@ async def fetch_foreign_articles(
 
     return await asyncio.to_thread(sync_search)
 
-async def fetch_sentiment_distribution(keyword: str, date_start: str, date_end: str, index: str = "news_article") -> dict:
-    """
-    Elasticsearch 기반 뉴스 감정 분포 분석 함수
 
-    Args:
-        keyword (str): 감정 분석 대상 키워드 (뉴스 제목 내 포함 여부 기준)
-        date_start (str): 검색 시작 날짜 (YYYY-MM-DD)
-        date_end (str): 검색 종료 날짜 (YYYY-MM-DD)
-        index (str): 조회 대상 Elasticsearch 인덱스 이름 (기본값: "news_article")
-
-    Returns:
-        dict:
-            - positive_percent (int): 긍정 비율 (%)
-            - negative_percent (int): 부정 비율 (%)
-            - neutral_percent (int): 중립 비율 (%)
-            - error (str, optional): 오류 발생 시 메시지
-            - sentiment_distribution (dict): 오류 발생 시 빈 딕셔너리
-            - total (int): 총 감정 분석 문서 수 (오류 발생 시 0)
-    """
+async def fetch_sentiment_distribution(
+    keyword: str,
+    date_start: str,
+    date_end: str,
+    index: str = "news_article"
+) -> dict:
     es = get_es_client()
     if es is None:
         return {
@@ -173,7 +138,12 @@ async def fetch_sentiment_distribution(keyword: str, date_start: str, date_end: 
         "query": {
             "bool": {
                 "must": [
-                    {"match": {"title": keyword}},
+                    {
+                        "query_string": {
+                            "query": f"*{keyword}*",
+                            "fields": ["title"]
+                        }
+                    },
                     {"range": {"date": {"gte": date_start, "lte": date_end}}}
                 ]
             }
