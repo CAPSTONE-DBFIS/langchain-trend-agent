@@ -217,7 +217,7 @@ class AgentChatService:
         <Tool Usage Example>
         Example 1:
         User Query: "삼성전자 관련 최근 IT 뉴스 보여줘"
-        Tool Calls: domestic_it_news_search_tool
+        Tool Calls: domestic_it_news_search_tool, foreign_news_search_tool
         
         Example 2:
         User Query: "AI 관련 트렌드 알려줘"
@@ -232,8 +232,8 @@ class AgentChatService:
         Tool Calls: global_it_news_trend_report_tool
         
         Example 5:
-        User Query: "SKT 관련 최근 웹 문서 찾아줘"
-        Tool Calls: web_search_tool
+        User Query: "SKT 관련 최근 뉴스 찾아줘"
+        Tool Calls: web_search_tool, domestic_it_news_search_tool
         
         Example 6:
         User Query: "(URL)에 들어가서 무슨 내용인지 정리해줘"
@@ -241,7 +241,7 @@ class AgentChatService:
         
         Example 7:
         User Query: "ai가 뭔지 알려줘"
-        Tool Calls: wikipedia_tool
+        Tool Calls: wikipedia_tool, web_search_tool
         
         Example 8:
         User Query: "일론 머스크에 대한 나무위키 문서를 검색해줘"
@@ -268,7 +268,7 @@ class AgentChatService:
         Tool Calls: dalle3_image_generation_tool
         
         Example 14:
-        User Query: "챗GPT 관련 최근 논문 찾아줘"
+        User Query: "ai agent 관련 최근 논문 찾아줘"
         Tool Calls: paper_search_tool
         </Tool Usage Example>
 
