@@ -6,14 +6,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# S3 클라이언트와 버킷을 초기화하는 공용 함수
 def get_s3_client_and_bucket():
-    """
-    S3 클라이언트와 버킷 이름을 반환하는 공용 함수
-
-    Returns:
-        tuple: (s3_client, bucket_name)
-    """
+    """S3 클라이언트와 버킷 이름을 반환하는 함수 """
     s3 = boto3.client(
         "s3",
         aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
@@ -24,17 +18,8 @@ def get_s3_client_and_bucket():
     return s3, bucket
 
 
-# 차트를 S3에 업로드하는 공용 함수
 def upload_chart_to_s3(chart_data, key: str) -> str:
-    """
-    차트 데이터를 S3에 업로드하고 URL을 반환하는 공용 함수
-
-    Args:
-        chart_data: 차트 객체 (Matplotlib Figure, Plotly Figure 등) 또는 BytesIO
-        key (str): S3 객체 키 (파일 경로)
-    Returns:
-        str: 업로드된 차트의 S3 URL
-    """
+    """차트 데이터를 S3에 업로드하고 URL을 반환하는 함수"""
     s3, bucket = get_s3_client_and_bucket()
 
     # 차트 데이터를 BytesIO로 변환

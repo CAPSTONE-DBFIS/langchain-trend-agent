@@ -10,6 +10,7 @@ import os
 BASE_UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data/uploads"))
 
 async def save_upload_file_to_disk(file: UploadFile, uploader_id: str):
+    """업로드 파일을 로컬 경로에 저장"""
     uploader_path = os.path.join(BASE_UPLOAD_DIR, uploader_id)
     os.makedirs(uploader_path, exist_ok=True)
 
@@ -22,9 +23,7 @@ async def save_upload_file_to_disk(file: UploadFile, uploader_id: str):
     return file_path
 
 def extract_text_by_filename(uploader_id: str, filename: str) -> str:
-    """
-    업로드된 파일에서 원본 텍스트를 추출
-    """
+    """업로드 파일에서 원본 텍스트를 추출"""
     file_path = os.path.join(BASE_UPLOAD_DIR, uploader_id, filename)
 
     if not os.path.exists(file_path):
@@ -48,7 +47,7 @@ def extract_text_by_filename(uploader_id: str, filename: str) -> str:
 
 
 def extract_pdf(contents: bytes) -> str:
-    """PDF 파일의 내용을 텍스트로 추출합니다."""
+    """PDF 파일 텍스트 추출"""
     text = ""
     with fitz.open(stream=contents, filetype="pdf") as doc:
         for page in doc:
@@ -60,7 +59,7 @@ def extract_pdf(contents: bytes) -> str:
     return text.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore").strip()
 
 def extract_docx(contents: bytes) -> str:
-    """DOCX 파일에서 텍스트 추출"""
+    """DOCX 파일 텍스트 추출"""
     doc = docx.Document(BytesIO(contents))
     return "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
 
@@ -76,6 +75,8 @@ def extract_hwp(contents: bytes) -> str:
     except Exception as e:
         print(f"[ERROR] HWP 텍스트 추출 오류: {e}")
         return ""
+
+
 def extract_text_from_hwp_binary(binary: bytes) -> str:
     """
     pyhwp에서 제공하는 hwp5txt CLI를 사용해 HWP 파일에서 텍스트 추출
@@ -100,7 +101,7 @@ def extract_text_from_hwp_binary(binary: bytes) -> str:
         os.unlink(tmp_path) # 파일 삭제
 
 def extract_txt(contents: bytes) -> str:
-    """TXT 파일에서 텍스트 추출"""
+    """TXT 파일 텍스트 추출"""
     try:
         text = contents.decode("utf-8", errors="ignore").strip()
         return text
