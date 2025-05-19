@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import os
 from typing import List, Any, Dict
 from fastapi.responses import StreamingResponse
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_xai import ChatXAI
@@ -144,7 +142,7 @@ class AgentChatService:
         else:
             raise ValueError(f"지원하지 않는 모델 타입입니다: {model_type}")
 
-        # 메모리 초기화
+        # 메모리 초기화 (모든 대화를 메모리에 저장하기엔 토큰이 너무 불어날 가능성이 있으므로, ConversationBufferWindowMemory 적용)
         memory = ConversationBufferWindowMemory(
             k=10,  # 최근 10개의 human+ai message 쌍 유지
             return_messages=True,
@@ -403,7 +401,7 @@ class AgentChatService:
                                 if new_text.strip():  # 공백이 아닌 경우만 스트리밍
                                     token = new_text
 
-                        # GPT / Gemini 모델 처리
+                        # 이외 모델 처리
                         elif hasattr(chunk, "content"):
                             content = chunk.content
                             if isinstance(content, list):
