@@ -1,0 +1,67 @@
+name: FastAPI CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: SSH deploy to EC2
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          echo "$SSH_KEY" > key.pem
+          chmod 600 key.pem
+
+          # 코드 업로드
+          rsync -av -e "ssh -i key.pem -o StrictHostKeyChecking=no" \
+            --exclude '.git' --exclude 'venv' --exclude '.venv' \
+            . $SSH_USER@$SSH_HOST:/home/$SSH_USER/fastapi-app
+
+          # EC2에서 작업 수행
+          ssh -i key.pem -o StrictHostKeyChecking=no $SSH_USER@$SSH_HOST << EOF
+            set -e
+
+            mkdir -p /home/$SSH_USER/fastapi-app
+            cd /home/$SSH_USER/fastapi-app
+
+            # .env 파일 생성 (printf로 줄바꿈 처리)
+            printf "%b" "$ENV_FILE" > .env
+
+            # Python 3.10 설치 여부 확인 및 설치
+            if ! command -v python3.10 &> /dev/null; then
+              sudo yum groupinstall "Development Tools" -y
+              sudo yum install gcc openssl-devel libffi-devel bzip2-devel wget make zlib-devel -y
+              cd /usr/src
+              sudo wget https://www.python.org/ftp/python/3.10.14/Python-3.10.14.tgz
+              sudo tar xzf Python-3.10.14.tgz
+              cd Python-3.10.14
+              sudo ./configure --enable-optimizations
+              sudo make altinstall
+            fi
+
+            # 앱 중단
+            pkill -f "uvicorn" || true
+
+            # 임시 저장소 지정
+            export TMPDIR=/home/$SSH_USER/tmp
+            mkdir -p \$TMPDIR
+
+            # 가상환경 생성 및 실행
+            python3.10 -m venv venv
+            source venv/bin/activate
+            pip install --upgrade pip
+            TMPDIR=\$TMPDIR pip install --no-cache-dir -r requirements.txt
+
+            nohup venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 > app.log 2>&1 &
+          EOF

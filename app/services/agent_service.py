@@ -90,12 +90,12 @@ class AgentChatService:
 
     @staticmethod
     async def stream_response(
-        query: str,
-        chat_room_id: int,
-        member_id: str,
-        persona_id: int,
-        file_statuses: List[dict] | None = None,
-        model_type: str = "gpt-4o-mini"
+            query: str,
+            chat_room_id: int,
+            member_id: str,
+            persona_id: int,
+            file_statuses: List[dict] | None = None,
+            model_type: str = "gpt-4o-mini"
     ) -> StreamingResponse:
         print(model_type)
 
@@ -108,19 +108,19 @@ class AgentChatService:
                 max_tokens=4096
             ).bind_tools(tools=tools, tool_choice="any")
 
-        elif model_type.lower() == "o4-mini" :
+        elif model_type.lower() == "o4-mini":
             print(rf"{model_type.lower()}")
             llm = ChatOpenAI(
-                model= "o4-mini",
-                temperature=1, # o4 mini에 대해서 gpt api에서 1로 강제 지정하도록 함
+                model="o4-mini",
+                temperature=1,  # o4-mini은 1로 강제 지정
                 streaming=True,
                 max_tokens=4096
             ).bind_tools(tools=tools, tool_choice="required")
 
-        elif model_type.lower() == "gpt-4o-mini" :
+        elif model_type.lower() == "gpt-4o-mini":
             print(rf"{model_type.lower()}")
             llm = ChatOpenAI(
-                model= "gpt-4o-mini",
+                model="gpt-4o-mini",
                 temperature=0,
                 streaming=True,
                 max_tokens=4096
@@ -190,12 +190,12 @@ class AgentChatService:
         Your responses must be independent, well-structured, and written in fluent Korean suitable for professional media, regardless of the input language.
         Do not use prior responses or internal knowledge.
         </Goal>
-        
+
         <Role & Persona>
         - Persona name: {persona_name}, Prompt: {persona_prompt}
         - Match the persona’s tone and style, but always adhere to the core rules below.
         </Role & Persona>
-        
+
         <Query Types & Special Instructions>
         - Academic Research: Provide long and detailed answers formatted as a scientific write-up with markdown sections, citing extensively from the tool output.
         - Recent News: Summarize events by topic, using lists with news titles, combining duplicate events, and citing diverse, trustworthy sources. Include as many relevant citations as possible.
@@ -203,7 +203,7 @@ class AgentChatService:
         - General Queries: Provide concise, accurate answers with clear structure, ensuring to cite all relevant information from the tool output.
         - For unspecified query types, default to Technical Trends instructions.
         </Query Types & Special Instructions>
-        
+
         <Tool Usage Rules>
         - Understand query intent and decompose complex queries into subtasks, using 1–3 relevant tools (e.g., web_search_tool, it_news_trend_keyword_tool).
         - Always prefer web_search_tool for broad queries; retry with revised queries or alternative tools if output is irrelevant.
@@ -216,55 +216,55 @@ class AgentChatService:
         Example 1:
         User Query: "삼성전자 관련 최근 IT 뉴스 보여줘"
         Tool Calls: domestic_it_news_search_tool, foreign_news_search_tool
-        
+
         Example 2:
         User Query: "AI 관련 트렌드 알려줘"
         Tool Calls: domestic_it_news_search_tool, foreign_news_search_tool, google_trends_tool
-        
+
         Example 3:
         User Query: "어제 트렌드 키워드 알려줘"
         Tool Calls: it_news_trend_keyword_tool
-        
+
         Example 4:
         User Query: "어제 트렌드 보고서 작성해줘"
         Tool Calls: global_it_news_trend_report_tool
-        
+
         Example 5:
         User Query: "SKT 관련 최근 뉴스 찾아줘"
         Tool Calls: web_search_tool, domestic_it_news_search_tool
-        
+
         Example 6:
         User Query: "(URL)에 들어가서 무슨 내용인지 정리해줘"
         Tool Calls: request_url_tool
-        
+
         Example 7:
         User Query: "ai가 뭔지 알려줘"
         Tool Calls: wikipedia_tool, web_search_tool
-        
+
         Example 8:
         User Query: "일론 머스크에 대한 나무위키 문서를 검색해줘"
         Tool Calls: namuwiki_tool
-        
+
         Example 9:
         User Query: "ai에 대한 구글 트렌드 일주일 관심도 변화를 알려줘"
         Tool Calls: google_trends_tool
-        
+
         Example 10:
         User Query: "엔비디아 주가 한달 추이 알려줘"
         Tool Calls: stock_history_tool, foreign_news_search_tool
-        
+
         Example 11:
         User Query: "닌텐도 스위치2에 대한 커뮤니티 반응을 알려줘"
         Tool Calls: community_search_tool
-        
+
         Example 12:
         User Query: "~에 대한 유튜브 영상 찾아줘"
         Tool Calls: youtube_video_tool
-        
+
         Example 13:
         User Query: "~ 스타일의 이미지를 생성해줘"
         Tool Calls: dalle3_image_generation_tool
-        
+
         Example 14:
         User Query: "ai agent 관련 최근 논문 찾아줘"
         Tool Calls: paper_search_tool
@@ -284,7 +284,7 @@ class AgentChatService:
         - Summary Table: At the end of every response, include a markdown table summarizing key themes, their descriptions, and related citation numbers (e.g., | Topic | Summary | Sources |).
         - End with 1–2 follow-up suggestions tailored to the query context.
         </Format Rules>
-        
+
         <Citation Rules>
         - Cite tool-derived claims immediately after the sentence (e.g., [1](https://example.com)). Include multiple citations if multiple sources support the claim.
         - Use unique, continuous numbering; never group indices (e.g., [1][2], not [1,2]).
@@ -342,7 +342,7 @@ class AgentChatService:
         - DO NOT start the answer with a header or bolded text.
         - DO NOT cite URLs unless the cited content is explicitly present in the article/post title or content.
         </Forbidden Behaviors>
-        
+
         <Output>
         Your answer must:
         - Provide theme-based analysis for technical trends, or follow query-type instructions.
@@ -352,7 +352,7 @@ class AgentChatService:
         - Ensure citation numbering is continuous across the entire document.
         - Maximize the use of information from tool outputs by citing extensively to provide the user with as much relevant data as possible.
         </Output>
-        
+
         <Current Date> {current_datetime} </Current Date>
         """
 
@@ -458,7 +458,7 @@ class AgentChatService:
 
     @staticmethod
     def _normalize_observation(obs_raw: Any, tool_name: str) -> List[Dict[str, Any]]:
-        """도구 출력을 리스트 형태로 정규화하며, title, content, url을 추출."""
+        """도구 출력에서, title, content, url을 추출."""
 
         def extract_item(item: Any, default_title: str = "정보 요약") -> Dict[str, Any]:
             result = {"title": default_title, "content": "", "url": ""}
@@ -497,7 +497,6 @@ class AgentChatService:
                             results.append(extracted)
             return results
 
-        # 기존 로직 유지
         if isinstance(key, list):
             for k in key:
                 if isinstance(obs_raw, dict) and k in obs_raw and isinstance(obs_raw[k], list):
