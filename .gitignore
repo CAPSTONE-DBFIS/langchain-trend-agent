@@ -175,3 +175,20 @@ data/texts/reddit_3.txt
 data/texts/reddit_2.txt
 data/texts/reddit_1.txt
 data/texts/reddit_0.txt
+data/processed/word_frequencies.csv
+!/notebooks/analysis.ipynb
+notebooks/analysis.ipynb
+=======
+
+# macOS specific files
+.DS_Store
+.idea/
+
+# Ignore Python cache files
+__pycache__/
+*.pycdata/raw/article_data.csv
+data/raw/article_data.csv
+*.csv
+/data/raw
+/scripts/sentiment/my_finetuned_bert1
+data/
