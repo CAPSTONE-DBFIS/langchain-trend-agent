@@ -27,7 +27,7 @@ async def agent_query(
     model_type: str = Form("gpt-4o-mini"),
     files: List[UploadFile] = File(None)
 ):
-    print(model_type)
+    print("선택된 모델 이름: ", model_type)
     file_statuses = None
 
     if files:
@@ -47,7 +47,7 @@ async def agent_query(
                     "error": str(e)
                 })
 
-    return await AgentChatService.stream_response( query, chat_room_id, member_id, persona_id, file_statuses, model_type)
+    return await AgentChatService.stream_response(query=query, chat_room_id=chat_room_id, member_id=member_id, persona_id=persona_id, model_type=model_type, file_statuses=file_statuses)
 
 
 @app.post("/team-files")
@@ -57,7 +57,7 @@ async def upload_team_file(
     file: UploadFile = File(...)
 ):
     print("수신된 파일 이름:", file.filename)
-    return await TeamFileOpsService.upload(team_id, file_id, file)
+    return await TeamFileOpsService.upload(team_id=team_id, file_id=file_id, file=file)
 
 
 @app.delete("/team-files/{team_id}/{file_id}")
@@ -69,10 +69,9 @@ async def delete_team_file(
     return {"status": "ok", "message": "벡터 임베딩 삭제 완료"}
 
 
-
 @app.post("/team-file/query")
 async def team_file_query(
     team_id: str = Form(...),
     query: str = Form(...),
 ):
-    return await TeamFileRAGService.stream_team_file_response(team_id, query)
+    return await TeamFileRAGService.stream_team_file_response(team_id=team_id, query=query)
