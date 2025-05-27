@@ -42,7 +42,6 @@ async def fetch_domestic_articles(
                             "multi_match": {
                                 "query": keyword,
                                 "fields": ["title^2", "content"],
-                                "fuzziness": "AUTO"
                             }
                         },
                         {
@@ -111,7 +110,6 @@ async def fetch_foreign_articles(
                             "multi_match": {
                                 "query": keyword,
                                 "fields": ["title^2", "content"],
-                                "fuzziness": "AUTO"
                             }
                         },
                         {

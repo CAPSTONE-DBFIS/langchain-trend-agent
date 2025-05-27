@@ -139,7 +139,6 @@ async def domestic_it_news_search_tool(
                         "multi_match": {
                             "query": keyword,
                             "fields": ["title^2", "content"],
-                            "fuzziness": "AUTO"
                         }
                     }
                 ]
