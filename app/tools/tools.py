@@ -136,13 +136,24 @@ async def domestic_it_news_search_tool(
                         }
                     },
                     {
-                        "match": {
-                            "title": {
-                                "query": keyword
-                            }
+                        "multi_match": {
+                            "query": keyword,
+                            "fields": ["title^2", "content"],
+                            "fuzziness": "AUTO"
                         }
                     }
                 ]
+            }
+        },
+        "highlight": {
+            "pre_tags": [""],
+            "post_tags": [""],
+            "fields": {
+                "content": {
+                    "fragment_size": 500,
+                    "number_of_fragments": 3,
+                    "no_match_size": 500
+                }
             }
         },
         "sort": [
@@ -168,9 +179,12 @@ async def domestic_it_news_search_tool(
         }
         for h in hits:
             source = h["_source"]
+            highlight = h.get("highlight", {})
+            content_snippet = highlight.get("content", [(source.get("content") or "")[:1000]])[0]
+
             result["results"].append({
                 "title": source.get("title", ""),
-                "content": (source.get("content") or "")[:1000],
+                "content": content_snippet,
                 "date": source.get("date", ""),
                 "url": source.get("url", ""),
                 "media_company": source.get("media_company", "")

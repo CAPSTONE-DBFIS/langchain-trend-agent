@@ -39,18 +39,38 @@ async def fetch_domestic_articles(
                 "bool": {
                     "must": [
                         {
-                            "query_string": {
-                                "query": f"*{keyword}*",
-                                "fields": ["title"]
+                            "multi_match": {
+                                "query": keyword,
+                                "fields": ["title^2", "content"],
+                                "fuzziness": "AUTO"
                             }
                         },
-                        {"range": {"date": {"gte": date_start, "lte": date_end}}}
+                        {
+                            "range": {
+                                "date": {
+                                    "gte": date_start,
+                                    "lte": date_end
+                                }
+                            }
+                        }
                     ]
+                }
+            },
+            "highlight": {
+                "pre_tags": [""],
+                "post_tags": [""],
+                "fields": {
+                    "content": {
+                        "fragment_size": 500,
+                        "number_of_fragments": 1,
+                        "no_match_size": 500
+                    }
                 }
             },
             "size": size,
             "sort": [{"date": {"order": "desc"}}]
         }
+
         try:
             res = es.search(index=index, body=query)
             return [
@@ -59,7 +79,7 @@ async def fetch_domestic_articles(
                     "date": hit["_source"].get("date"),
                     "media_company": hit["_source"].get("media_company"),
                     "url": hit["_source"].get("url"),
-                    "content": hit["_source"].get("content", "")[:500] + "..."
+                    "content": hit.get("highlight", {}).get("content", [hit["_source"].get("content", "")[:500]])[0]
                 }
                 for hit in res["hits"]["hits"]
             ]
@@ -88,18 +108,38 @@ async def fetch_foreign_articles(
                 "bool": {
                     "must": [
                         {
-                            "query_string": {
-                                "query": f"*{keyword}*",
-                                "fields": ["title"]
+                            "multi_match": {
+                                "query": keyword,
+                                "fields": ["title^2", "content"],
+                                "fuzziness": "AUTO"
                             }
                         },
-                        {"range": {"date": {"gte": date_start, "lte": date_end}}}
+                        {
+                            "range": {
+                                "date": {
+                                    "gte": date_start,
+                                    "lte": date_end
+                                }
+                            }
+                        }
                     ]
+                }
+            },
+            "highlight": {
+                "pre_tags": [""],
+                "post_tags": [""],
+                "fields": {
+                    "content": {
+                        "fragment_size": 500,
+                        "number_of_fragments": 1,
+                        "no_match_size": 500
+                    }
                 }
             },
             "size": size,
             "sort": [{"date": {"order": "desc"}}]
         }
+
         try:
             res = es.search(index=index, body=query)
             return [
@@ -108,7 +148,7 @@ async def fetch_foreign_articles(
                     "date": hit["_source"].get("date"),
                     "media_company": hit["_source"].get("media_company"),
                     "url": hit["_source"].get("url"),
-                    "content": hit["_source"].get("content", "")[:500] + "..."
+                    "content": hit.get("highlight", {}).get("content", [hit["_source"].get("content", "")[:500]])[0]
                 }
                 for hit in res["hits"]["hits"]
             ]
@@ -139,12 +179,20 @@ async def fetch_sentiment_distribution(
             "bool": {
                 "must": [
                     {
-                        "query_string": {
-                            "query": f"*{keyword}*",
-                            "fields": ["title"]
+                        "match": {
+                            "title": {
+                                "query": keyword,
+                            }
                         }
                     },
-                    {"range": {"date": {"gte": date_start, "lte": date_end}}}
+                    {
+                        "range": {
+                            "date": {
+                                "gte": date_start,
+                                "lte": date_end
+                            }
+                        }
+                    }
                 ]
             }
         },
