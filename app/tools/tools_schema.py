@@ -5,6 +5,9 @@ class DomesticITNewsSearchSchema(BaseModel):
     keyword: str = Field(..., description="Primary keyword for search")
     date_start: Optional[str] = Field(None, description="Search start date (YYYY-MM-DD), defaults to 60 days ago")
     date_end: Optional[str] = Field(None, description="Search end date (YYYY-MM-DD), defaults to yesterday")
+    max_result: int = Field(
+        10, ge=1, le=20, description="Maximum number of results to return (1–20, default 10)"
+    )
 
 class ForeignNewsSearchSchema(BaseModel):
     en_keyword: str = Field(..., description="English keyword for search")
@@ -24,7 +27,9 @@ class SearchWebSchema(BaseModel):
 
 class YoutubeVideoSchema(BaseModel):
     query: str = Field(..., description="Search keyword")
-    max_results: int = Field(5, description="Maximum number of results (1-50)")
+    max_results: int = Field(
+        5, ge=1, le=10, description="Maximum number of results to return (1–10, default 5)"
+    )
 
 class RequestUrlSchema(BaseModel):
     input_url: str = Field(..., description="Absolute URL of an HTTP(S) webpage or PDF file")

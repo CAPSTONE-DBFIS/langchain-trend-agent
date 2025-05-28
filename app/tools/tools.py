@@ -74,7 +74,8 @@ KST = timezone(timedelta(hours=9))
 async def domestic_it_news_search_tool(
     keyword: str,
     date_start: str | None = None,
-    date_end: str | None = None
+    date_end: str | None = None,
+    max_result:int = 10,
 ) -> Dict[str, Any]:
     """
     Domestic IT News Search Tool
@@ -87,6 +88,8 @@ async def domestic_it_news_search_tool(
         keyword (str): Primary keyword for search
         date_start (str, optional): Search start date (YYYY-MM-DD), defaults to 60 days ago
         date_end (str, optional): Search end date (YYYY-MM-DD), defaults to yesterday
+        max_result (int, optional): Maximum number of articles (default 10)
+
 
     Returns:
         Dict[str, Any]:
@@ -160,7 +163,7 @@ async def domestic_it_news_search_tool(
             {"_score": {"order": "desc"}}
         ],
         "from": 0,
-        "size": 10
+        "size": max_result
     }
 
     try:
@@ -1041,7 +1044,11 @@ async def community_search_tool(
 
 @tool(args_schema=YoutubeVideoSchema)
 @async_time_logger("youtube_video_tool")
-async def youtube_video_tool(query: str, max_results: int = 5):
+async def youtube_video_tool(
+    query: str,
+    max_results: int = 5,
+    order: str = "relevance"
+):
     """
     YouTube Video Search Tool using YouTube Data API
 
@@ -1052,7 +1059,8 @@ async def youtube_video_tool(query: str, max_results: int = 5):
 
     Args:
         query (str): Search keyword
-        max_results (int, optional): Maximum number of results (1-50, default 5)
+        max_results (int, optional): Maximum number of results (1-10, default 5)
+        order (str, optional): Sorting method: 'relevance', 'date', 'viewCount' etc.
 
     Returns:
         List[Dict]: List of videos with videoId, title, description, channelTitle, publishedAt, thumbnailUrl, url
@@ -1065,7 +1073,7 @@ async def youtube_video_tool(query: str, max_results: int = 5):
         type="video",
         maxResults=max_results,
         regionCode="KR",
-        order="relevance"
+        order=order
     ).execute()
 
     results = [
