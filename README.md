@@ -63,19 +63,22 @@ langchain-trend-agent
 
 ## 구현된 도구
 
-* **domestic\_it\_news\_search\_tool**: 크롤링 IT 뉴스 기사 기반 Elasticsearch를 이용한 국내 IT 뉴스 검색 및 분석
-* **foreign\_news\_search\_tool**: GNews API 기반 해외 뉴스 검색 및 분석
-* **it\_news\_trend\_keyword\_tool**: 키워드 빈도 및 감정 분석 데이터를 통한 국내 뉴스 트렌드 분석
-* **global_it_news_trend_report_tool**: 기간내 키워드 빈도, 크롤링 IT 뉴스 기반 자동화된 트렌드 보고서 생성
-* **google\_trends\_tool**: Google 트렌드 데이터 시계열 분석
-* **community\_search\_tool**: Naver, Daum 블로그 및 Reddit, X(트위터) 게시물 검색
-* **youtube\_video\_tool**: YouTube API를 이용한 관련 비디오 검색
-* **request\_url\_tool**: 웹페이지 및 PDF에서 텍스트 추출
-* **wikipedia\_tool**: Wikipedia에서 개념 및 정의 검색
-* **namuwiki\_tool**: 나무위키에서 관련 정보 검색
-* **stock\_history\_tool**: 주식 데이터 및 차트 분석
-* **dalle3\_image\_generation\_tool**: DALL·E 3를 이용한 이미지 생성
-* **paper\_search\_tool**: OpenAlex API 기반 최신 논문 검색 및 분석
+| 도구명               | 설명                                                                    | 주요 옵션                                                                                                           |
+| ----------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **트렌드 분석 도구**     | DB에 저장된 키워드 빈도와 감정분석 데이터를 집계하여 기간별 상위 키워드 및 감정 분포 차트를 생성              | `period`: 'daily'/'weekly'/'monthly'<br>`date`: 'YYYY-MM-DD'                                                    |
+| **국내 뉴스 검색 도구**   | ElasticSearch에 저장된 국내 IT 뉴스에서 키워드 매칭 후 최신 순으로 최대 `max_result`개 문서를 반환 | `keyword`: str<br>`date_start`, `date_end`: 'YYYY-MM-DD'<br>`max_result`: int                                   |
+| **해외 뉴스 검색 도구**   | GNews API 호출로 영어 키워드 기반 해외 IT 뉴스 검색                                   | `en_keyword`: str<br>`lang`: str (default 'en')<br>`country`: str (default 'us')<br>`max_results`: int          |
+| **트렌드 레포트 생성 도구** | 기간 내 국내·해외 키워드 빈도 차트와 기사 요약을 포함한 DOCX 보고서를 생성                         | `date_start`, `date_end`: 'YYYY-MM-DD'                                                                          |
+| **구글 트렌드 도구**     | PyTrends로 Google 트렌드 시계열 데이터를 조회 후 차트 업로드                             | `query`: str<br>`start_date`, `end_date`: 'YYYY-MM-DD' (optional)                                               |
+| **커뮤니티 검색 도구**    | Naver/Daum 블로그, Reddit, X(Twitter) 게시물을 병렬 호출 후 플랫폼별 균등 배분            | `korean_keyword`, `english_keyword`: str<br>`platform`: 'all'/'daum'/'naver'/'reddit'/'x'<br>`max_results`: int |
+| **유튜브 검색 도구**     | YouTube Data API로 영상 검색, `order`와 `max_results` 옵션 반영                 | `query`: str<br>`max_results`: int<br>`order`: str (e.g., 'relevance','date','viewCount')                       |
+| **웹페이지 추출 도구**    | HTML/PDF URL에서 본문 텍스트를 추출하여 반환                                        | `input_url`: str                                                                                                |
+| **위키피디아 검색 도구**   | 한국어 위키피디아 우선 검색 후 요약 제공, 실패 시 영어 대체                                   | `query`: str                                                                                                    |
+| **나무위키 검색 도구**    | 나무위키 문서를 크롤링하여 주요 내용만 필터링·요약                                          | `keyword`: str                                                                                                  |
+| **주식 조회 도구**      | FinanceDataReader 또는 yfinance로 OHLCV 조회, 종가·거래량 차트 생성 후 업로드           | `symbol`: str<br>`start`, `end`: 'YYYY-MM-DD'                                                                   |
+| **이미지 생성 도구**     | DALL·E 3를 활용하여 자연어 프롬프트 기반 고품질 이미지 생성                                 | `prompt`: str                                                                                                   |
+| **논문 검색 도구**      | OpenAlex API로 논문 검색, 초록 및 메타데이터 추출 후 반환                               | `query`: str<br>`max_results`: int<br>`start_date`, `end_date`: 'YYYY-MM-DD'<br>`sort_by`: 'relevance'/'date'   |
+
 
 ---
 
