@@ -23,8 +23,8 @@ def get_es_client() -> Elasticsearch | None:
 
 async def fetch_domestic_articles(
     keyword: str,
-    date_start: str,
-    date_end: str,
+    start_date: str,
+    end_date: str,
     index: str = os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME"),
     size: int = 5
 ) -> List[Dict[str, Any]]:
@@ -47,8 +47,8 @@ async def fetch_domestic_articles(
                         {
                             "range": {
                                 "date": {
-                                    "gte": date_start,
-                                    "lte": date_end
+                                    "gte": start_date,
+                                    "lte": end_date
                                 }
                             }
                         }
@@ -91,8 +91,8 @@ async def fetch_domestic_articles(
 
 async def fetch_foreign_articles(
     keyword: str,
-    date_start: str,
-    date_end: str,
+    start_date: str,
+    end_date: str,
     index: str = os.getenv("ELASTICSEARCH_FOREIGN_INDEX_NAME"),
     size: int = 5
 ) -> List[Dict[str, Any]]:
@@ -115,8 +115,8 @@ async def fetch_foreign_articles(
                         {
                             "range": {
                                 "date": {
-                                    "gte": date_start,
-                                    "lte": date_end
+                                    "gte": start_date,
+                                    "lte": end_date
                                 }
                             }
                         }
@@ -159,8 +159,8 @@ async def fetch_foreign_articles(
 
 async def fetch_sentiment_distribution(
     keyword: str,
-    date_start: str,
-    date_end: str,
+    start_date: str,
+    end_date: str,
     index: str = "news_article"
 ) -> dict:
     es = get_es_client()
@@ -186,8 +186,8 @@ async def fetch_sentiment_distribution(
                     {
                         "range": {
                             "date": {
-                                "gte": date_start,
-                                "lte": date_end
+                                "gte": start_date,
+                                "lte": end_date
                             }
                         }
                     }

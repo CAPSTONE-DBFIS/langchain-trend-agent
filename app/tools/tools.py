@@ -5,17 +5,14 @@ import logging
 import os
 import re
 import time
-import platform
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Dict, List, Union
 from urllib.parse import quote
 from uuid import uuid4
 
-from matplotlib import font_manager as fm
 import aiohttp
 import FinanceDataReader as fdr
-import matplotlib.pyplot as plt
 import openai
 import pandas as pd
 import plotly.express as px
@@ -48,7 +45,8 @@ from twikit import Client
 from app.utils.db_util import get_db_connection
 from app.utils.redis_util import get_redis_client
 from app.utils.s3_util import upload_chart_to_s3, get_s3_client_and_bucket
-from app.utils.es_util import fetch_domestic_articles, fetch_foreign_articles, fetch_sentiment_distribution
+from app.utils.es_util import fetch_domestic_articles, fetch_foreign_articles, fetch_sentiment_distribution, \
+    get_es_client
 from app.tools.tools_schema import *
 
 logger = logging.getLogger(__name__)
@@ -69,13 +67,13 @@ def async_time_logger(name: str):
 load_dotenv()
 KST = timezone(timedelta(hours=9))
 
-@tool(args_schema=DomesticITNewsSearchSchema)
+@tool(args_schema=DomesticNewsSearchSchema)
 @async_time_logger("domestic_it_news_search_tool")
 async def domestic_it_news_search_tool(
     keyword: str,
-    date_start: str | None = None,
-    date_end: str | None = None,
-    max_result:int = 10,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    max_results:int = 10,
 ) -> Dict[str, Any]:
     """
     Domestic IT News Search Tool
@@ -86,34 +84,34 @@ async def domestic_it_news_search_tool(
 
     Args:
         keyword (str): Primary keyword for search
-        date_start (str, optional): Search start date (YYYY-MM-DD), defaults to 60 days ago
-        date_end (str, optional): Search end date (YYYY-MM-DD), defaults to yesterday
-        max_result (int, optional): Maximum number of articles (default 10)
+        start_date (str, optional): Search start date (YYYY-MM-DD), defaults to 60 days ago
+        end_date (str, optional): Search end date (YYYY-MM-DD), defaults to yesterday
+        max_results (int, optional): Maximum number of articles (default 10)
 
 
     Returns:
         Dict[str, Any]:
             - keyword (str): Search keyword
-            - date_start (str): Start date
-            - date_end (str): End date
+            - start_date (str): Start date
+            - end_date (str): End date
             - results (List[Dict]): List of articles with title, content, date, url, media_company
 
     Notes:
         - Today's date (after 00:00) or future dates are not supported.
     """
-    if date_start is None:
-        date_start = (
+    if start_date is None:
+        start_date = (
             datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=60)
         ).strftime("%Y-%m-%d")
 
-    if date_end is None:
-        date_end = (
+    if end_date is None:
+        end_date = (
             datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=1)
         ).strftime("%Y-%m-%d")
 
     # 캐시 조회
     r = get_redis_client()
-    cache_key = f"news:es:flat:{keyword}:{date_start}:{date_end}"
+    cache_key = f"news:es:flat:{keyword}:{start_date}:{end_date}"
     if (cached := r.get(cache_key)):
         return json.loads(cached)
 
@@ -133,8 +131,8 @@ async def domestic_it_news_search_tool(
                     {
                         "range": {
                             "date": {
-                                "gte": f"{date_start}T00:00:00",
-                                "lte": f"{date_end}T23:59:59"
+                                "gte": f"{start_date}T00:00:00",
+                                "lte": f"{end_date}T23:59:59"
                             }
                         }
                     },
@@ -163,7 +161,7 @@ async def domestic_it_news_search_tool(
             {"_score": {"order": "desc"}}
         ],
         "from": 0,
-        "size": max_result
+        "size": max_results
     }
 
     try:
@@ -175,8 +173,8 @@ async def domestic_it_news_search_tool(
 
         result = {
             "keyword": keyword,
-            "date_start": date_start,
-            "date_end": date_end,
+            "start_date": start_date,
+            "end_date": end_date,
             "results": []
         }
         for h in hits:
@@ -276,9 +274,9 @@ async def foreign_news_search_tool(
         return {"error": f"GNews search failed: {str(e)}"}
 
 
-@tool(args_schema=ITNewsTrendKeywordSchema)
-@async_time_logger("it_news_trend_keyword_tool")
-async def it_news_trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any]:
+@tool(args_schema=TrendKeywordSchema)
+@async_time_logger("trend_keyword_tool")
+async def trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any]:
     """
     IT News Keyword Trend Tool
 
@@ -293,7 +291,7 @@ async def it_news_trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any
     Returns:
         Dict[str, Any]:
             - date (str): Reference date
-            - main_chart_url (str): URL of the main keyword frequency bar chart
+            - main_chart_url (str): URL of the combined (frequency + sentiment) stacked bar chart
             - keywords (List[Dict]): List of keyword data, each containing:
                 - keyword (str): Keyword
                 - frequency (int): Frequency of the keyword
@@ -302,258 +300,376 @@ async def it_news_trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any
     """
 
     r = get_redis_client()
-    cache_key = f"{period}_trend:{date}:"
+    cache_key = f"{period}_trend:{date}"
     if (cached := r.get(cache_key)):
         return json.loads(cached)
 
+    # 기간 계산
     if period == "daily":
-        date_start = date_end = date
-
+        start_date = end_date = date
     elif period == "weekly":
-        date_end = date
-        date_start = (datetime.fromisoformat(date) - timedelta(days=7)).strftime("%Y-%m-%d")
-
+        end_date = date
+        start_date = (datetime.fromisoformat(date) - timedelta(days=7)).strftime("%Y-%m-%d")
     elif period == "monthly":
-        date_end = date
-        date_start = (datetime.fromisoformat(date) - timedelta(days=30)).strftime("%Y-%m-%d")
-
+        end_date = date
+        start_date = (datetime.fromisoformat(date) - timedelta(days=30)).strftime("%Y-%m-%d")
     else:
-        return {"error": "Period must be 'daily' or 'weekly' or 'monthly'."}
+        return {"error": "Period must be 'daily', 'weekly', or 'monthly'."}
 
-    # PostgreSQL에서 키워드 조회
+    # 상위 10개 키워드 + 빈도 조회
     conn = get_db_connection()
     cur = conn.cursor()
     if period == "daily":
         cur.execute("""
-            SELECT keyword, SUM(frequency)
-            FROM keyword_frequencies
-            WHERE date = %s
-            GROUP BY keyword
-            ORDER BY SUM(frequency) DESC
-            LIMIT 10
-        """, (date,))
-
+                SELECT keyword, SUM(frequency)
+                FROM keyword_frequencies
+                WHERE date = %s
+                GROUP BY keyword
+                ORDER BY SUM(frequency) DESC
+                LIMIT 10
+            """, (date,))
     else:
         cur.execute("""
-            SELECT keyword, SUM(frequency)
-            FROM keyword_frequencies
-            WHERE date BETWEEN %s AND %s
-            GROUP BY keyword
-            ORDER BY SUM(frequency) DESC
-            LIMIT 10
-        """, (date_start, date_end))
-
-    rows = cur.fetchall()
+                SELECT keyword, SUM(frequency)
+                FROM keyword_frequencies
+                WHERE date BETWEEN %s AND %s
+                GROUP BY keyword
+                ORDER BY SUM(frequency) DESC
+                LIMIT 10
+            """, (start_date, end_date))
+    rows = cur.fetchall()  # [(kw1, freq1), (kw2, freq2), ...]
     cur.close()
     conn.close()
 
     if not rows:
-        return {
-            "date": date,
-            "main_chart_url": None,
-            "keywords": []
-        }
+        return {"date": date, "main_chart_url": None, "keywords": []}
 
-    keywords = [kw for kw, _ in rows]
-    keyword_frequencies = dict(rows)
+    # 키워드/빈도 딕셔너리
+    keywords = [r0 for r0, _ in rows]
+    keyword_freqs = {r0: int(r1) for r0, r1 in rows}
 
-    # 차트 생성
-    df_main = pd.DataFrame({
-        "keyword": keywords,
-        "frequency": [keyword_frequencies[kw] for kw in keywords]
-    })
-    fig_main = px.bar(
-        df_main, x="frequency", y="keyword",
-        title="주요 키워드 빈도", height=400,
-        labels={"frequency": "출현 빈도", "keyword": "키워드"}
-    )
-    fig_main.update_layout(
-        margin=dict(l=120, r=20, t=50, b=20),
-        yaxis=dict(categoryorder="total ascending"),
-        font=dict(family="Noto Sans CJK KR")
-    )
-    key_main = f"{period}/{date}/main-bar.png"
-    main_chart_url = upload_chart_to_s3(fig_main, key_main)
-
-    # 병렬 작업 수집
-    tasks = {}
+    # 감정 비율 조회
+    sentiment_rows = []
     for kw in keywords:
-        tasks[kw] = {
-            "domestic": asyncio.create_task(fetch_domestic_articles(kw, date_start, date_end)),
-            "sentiment": asyncio.create_task(fetch_sentiment_distribution(kw, date_start, date_end))
-        }
-
-    results = []
-    for kw in keywords:
-        dom = await tasks[kw]["domestic"]
-        sent = await tasks[kw]["sentiment"]
-
-        results.append({
+        sent = await fetch_sentiment_distribution(keyword=kw, start_date=start_date, end_date=end_date)
+        pos_pct = int(sent.get("positive_percent", 0))
+        neu_pct = int(sent.get("neutral_percent", 0))
+        neg_pct = int(sent.get("negative_percent", 0))
+        sentiment_rows.append({
             "keyword": kw,
-            "frequency": keyword_frequencies[kw],
-            "sentiment_percent": sent,
-            "articles": dom,
+            "positive_pct": pos_pct,
+            "neutral_pct": neu_pct,
+            "negative_pct": neg_pct
         })
 
-    result = {
+    df_sent = pd.DataFrame(sentiment_rows)
+
+    # 실제 스택 높이 계산: “총 빈도수 * (감정 비율 / 100)”
+    positive_heights = [
+        int(keyword_freqs[kw] * row["positive_pct"] / 100)
+        for kw, row in zip(df_sent["keyword"], sentiment_rows)
+    ]
+    neutral_heights = [
+        int(keyword_freqs[kw] * row["neutral_pct"] / 100)
+        for kw, row in zip(df_sent["keyword"], sentiment_rows)
+    ]
+    negative_heights = [
+        int(keyword_freqs[kw] * row["negative_pct"] / 100)
+        for kw, row in zip(df_sent["keyword"], sentiment_rows)
+    ]
+
+    # Plotly – stacked bar 생성
+    fig_main = go.Figure()
+
+    fig_main.add_trace(go.Bar(
+        x=df_sent["keyword"],
+        y=positive_heights,
+        name="긍정",
+        marker_color="seagreen",
+        hovertemplate="%{x}<br>긍정 수: %{y}<extra></extra>"
+    ))
+
+    fig_main.add_trace(go.Bar(
+        x=df_sent["keyword"],
+        y=neutral_heights,
+        name="중립",
+        marker_color="lightgray",
+        hovertemplate="%{x}<br>중립 수: %{y}<extra></extra>"
+    ))
+
+    fig_main.add_trace(go.Bar(
+        x=df_sent["keyword"],
+        y=negative_heights,
+        name="부정",
+        marker_color="salmon",
+        hovertemplate="%{x}<br>부정 수: %{y}<extra></extra>",
+        text=[keyword_freqs[kw] for kw in df_sent["keyword"]],
+        textposition="outside"
+    ))
+
+    # 레이아웃 세팅
+    fig_main.update_layout(
+        barmode="stack",
+        title=f"{start_date} ~ {end_date} 주요 키워드 빈도수 및 감정 분포",
+        xaxis=dict(
+            title="키워드",
+            tickangle=-45
+        ),
+        yaxis=dict(
+            title="총 언급 수"
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        font=dict(family="Noto Sans CJK KR"),
+        height=500,
+        margin=dict(l=40, r=40, t=80, b=120)
+    )
+
+    # S3에 업로드
+    key_main = f"{period}/{date}/freq_sentiment_stacked_{uuid4().hex[:6]}.png"
+    main_chart_url = upload_chart_to_s3(fig_main, key_main)
+
+    # 각 키워드별 기사 목록 가져오기
+    results = []
+    for kw in keywords:
+        articles = await fetch_domestic_articles(keyword=kw, start_date=start_date, end_date=end_date)
+        results.append({
+            "keyword": kw,
+            "frequency": keyword_freqs[kw],
+            "sentiment_percent": {
+                "positive": int(df_sent.loc[df_sent["keyword"] == kw, "positive_pct"].iloc[0]),
+                "neutral": int(df_sent.loc[df_sent["keyword"] == kw, "neutral_pct"].iloc[0]),
+                "negative": int(df_sent.loc[df_sent["keyword"] == kw, "negative_pct"].iloc[0])
+            },
+            "articles": articles
+        })
+
+    output = {
         "date": date,
         "main_chart_url": main_chart_url,
         "keywords": results
     }
 
-    r.set(cache_key, json.dumps(result, ensure_ascii=False))
-    return result
+    # 캐시에 저장 (7일)
+    r.setex(cache_key, timedelta(days=7), json.dumps(output, ensure_ascii=False))
+    return output
 
 
-
-@tool(args_schema=GlobalITNewsTrendReportSchema)
-async def global_it_news_trend_report_tool(date_start=None, date_end=None):
+@tool(args_schema=TrendReportSchema)
+async def trend_report_tool(start_date=None, end_date=None):
     """
-        Global IT News Trend Report Generation Tool (Domestic + Foreign)
+        Global IT News Trend Report Generation Tool
 
         When to use:
-            - When a structured IT industry trend report is needed for a given time range.
+            - When a structured IT industry trend report is needed for a specific time range.
             - When analyzing domestic and foreign keyword frequencies and summarizing relevant news articles.
             - When generating a downloadable document (DOCX) with visualizations.
 
         Args:
-            date_start (str, optional): Start date in format YYYY-MM-DD. Defaults to yesterday.
-            date_end (str, optional): End date in format YYYY-MM-DD. Defaults to yesterday.
+            start_date (str, optional): Start date in format YYYY-MM-DD. Defaults to yesterday.
+            end_date (str, optional): End date in format YYYY-MM-DD. Defaults to yesterday.
 
         Returns:
-            List[Dict[str, Any]]:
-                - On success: [{'content': download_message, 'url': presigned_url}]
-                - On failure: [{'error': error_message}]
-
-        Notes:
-            - Combines top keywords from both domestic and foreign news databases.
-            - Generates bar charts for each and summarizes news in structured document format.
-            - Report sections: 개요 → 국내 뉴스 분석 → 해외 뉴스 분석 → 결론.
+            str: Presigned URL to download the generated DOCX report
     """
 
-    kst = ZoneInfo("Asia/Seoul")
-    now = datetime.now(kst)
-    yesterday = (now - timedelta(days=1)).strftime('%Y-%m-%d')
-
-    date_start = date_start or yesterday
-    date_end = date_end or yesterday
-
-    cache_key = f"trend_report:{date_start}:{date_end}"
+    # 캐시 확인
+    cache_key = f"trend_report:{start_date}:{end_date}"
     r = get_redis_client()
     if cached := r.get(cache_key):
-        return cached
+        return cached.decode() if isinstance(cached, bytes) else cached
 
+    # DB에서 상위 10개 국내/해외 키워드 조회
     conn = get_db_connection()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT keyword, SUM(frequency)
-        FROM keyword_analysis
-        WHERE date BETWEEN %s AND %s
-        GROUP BY keyword
-        ORDER BY SUM(frequency) DESC
-        LIMIT 10
-    """, (date_start, date_end))
+            SELECT keyword, SUM(frequency)
+            FROM keyword_analysis
+            WHERE date BETWEEN %s AND %s
+            GROUP BY keyword
+            ORDER BY SUM(frequency) DESC
+            LIMIT 10
+        """, (start_date, end_date))
     dom_rows = cur.fetchall()
-
     if not dom_rows:
-        return [{"error": f"No domestic keywords found between {date_start} and {date_end}."}]
+        return [{"error": f"No domestic keywords found between {start_date} and {end_date}."}]
 
     cur.execute("""
-        SELECT keyword, SUM(frequency)
-        FROM foreign_keyword_analysis
-        WHERE date BETWEEN %s AND %s
-        GROUP BY keyword
-        ORDER BY SUM(frequency) DESC
-        LIMIT 10
-    """, (date_start, date_end))
+            SELECT keyword, SUM(frequency)
+            FROM foreign_keyword_analysis
+            WHERE date BETWEEN %s AND %s
+            GROUP BY keyword
+            ORDER BY SUM(frequency) DESC
+            LIMIT 10
+        """, (start_date, end_date))
     for_rows = cur.fetchall()
-
     if not for_rows:
-        return [{"error": f"No foriegn keywords found between {date_start} and {date_end}."}]
+        return [{"error": f"No foreign keywords found between {start_date} and {end_date}."}]
 
     cur.close()
     conn.close()
 
-    def make_chart(rows, title_prefix):
-        labels, freqs = zip(*rows)
+    # 국내: 감정 분포 스택형 차트 생성 함수
+    async def make_domestic_sentiment_chart(rows: List[tuple], title_prefix: str) -> str:
+        """
+        rows: List of tuples [(keyword, freq), ...]
+        title_prefix: "국내"
+        반환값: 로컬에 저장된 차트 파일 경로 (PNG)
+        """
+        # 키워드와 빈도 dictionary
+        keywords = [row[0] for row in rows]
+        keyword_freqs: Dict[str, int] = {row[0]: int(row[1]) for row in rows}
 
-        system = platform.system()
-        font_path = None
+        # 감정 분포 비율 조회
+        sentiment_list = []
+        for kw in keywords:
+            sent = await fetch_sentiment_distribution(kw, start_date, end_date)
+            pos_pct = int(sent.get("positive_percent", 0))
+            neu_pct = int(sent.get("neutral_percent", 0))
+            neg_pct = int(sent.get("negative_percent", 0))
+            sentiment_list.append({
+                "keyword": kw,
+                "positive_pct": pos_pct,
+                "neutral_pct": neu_pct,
+                "negative_pct": neg_pct
+            })
 
-        if system == "Darwin":
-            candidates = [
-                "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
-                "/Library/Fonts/AppleGothic.ttf",
-                "/System/Library/Fonts/AppleSDGothicNeo.ttc"
-            ]
-        elif system == "Linux":
-            candidates = [
-                "/usr/share/fonts/noto/NotoSansCJKkr-Regular.otf"
-            ]
-        elif system == "Windows":
-            candidates = [
-                "C:/Windows/Fonts/malgun.ttf",
-                "C:/Windows/Fonts/batang.ttc",
-                "C:/Windows/Fonts/gulim.ttc"
-            ]
-        else:
-            candidates = []
+        df_sent = pd.DataFrame(sentiment_list)
 
-        for path in candidates:
-            if os.path.exists(path):
-                font_path = path
-                break
+        # 스택형 높이 계산
+        positive_counts = [
+            int(keyword_freqs[kw] * row["positive_pct"] / 100)
+            for kw, row in zip(df_sent["keyword"], sentiment_list)
+        ]
+        neutral_counts = [
+            int(keyword_freqs[kw] * row["neutral_pct"] / 100)
+            for kw, row in zip(df_sent["keyword"], sentiment_list)
+        ]
+        negative_counts = [
+            int(keyword_freqs[kw] * row["negative_pct"] / 100)
+            for kw, row in zip(df_sent["keyword"], sentiment_list)
+        ]
 
-        if font_path:
-            fm.fontManager.addfont(font_path)
-            font_prop = fm.FontProperties(fname=font_path)
-            font_name = font_prop.get_name()
-            plt.rcParams['font.family'] = font_name
-            print(f"[DEBUG] 적용된 폰트: {font_name} @ {font_path}")
-        else:
-            plt.rcParams['font.family'] = 'Arial'
-            print("[DEBUG] 폰트 파일 없음, Arial 사용됨")
+        # Plotly 스택형 바 차트
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=df_sent["keyword"],
+            y=positive_counts,
+            name="긍정 건수",
+            marker_color="seagreen",
+            hovertemplate="%{x}<br>긍정: %{y}<extra></extra>"
+        ))
+        fig.add_trace(go.Bar(
+            x=df_sent["keyword"],
+            y=neutral_counts,
+            name="중립 건수",
+            marker_color="lightgray",
+            hovertemplate="%{x}<br>중립: %{y}<extra></extra>"
+        ))
+        # 부정 trace에 전체 빈도 텍스트 표시
+        fig.add_trace(go.Bar(
+            x=df_sent["keyword"],
+            y=negative_counts,
+            name="부정 건수",
+            marker_color="salmon",
+            hovertemplate="%{x}<br>부정: %{y}<extra></extra>",
+            text=[keyword_freqs[kw] for kw in df_sent["keyword"]],
+            textposition="outside"
+        ))
 
-        plt.rcParams['axes.unicode_minus'] = False
+        fig.update_layout(
+            barmode="stack",
+            title=f"{start_date} ~ {end_date} {title_prefix} 키워드 빈도수 및 감정 분포",
+            xaxis=dict(title="키워드", tickangle=-45),
+            yaxis=dict(title="총 언급 수"),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            ),
+            font=dict(family="Noto Sans CJK KR"),
+            height=450,
+            margin=dict(l=40, r=40, t=60, b=100)
+        )
 
-        plt.figure(figsize=(8, 5))
-        bars = plt.bar(labels, freqs, color='skyblue')
-        plt.title(f"{date_start} ~ {date_end} {title_prefix} 키워드 빈도")
-        for bar in bars:
-            yval = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width() / 2, yval + 0.2, int(yval), ha='center')
+        # 로컬에 이미지 저장
         base_dir = os.path.abspath("./data/reports")
         os.makedirs(base_dir, exist_ok=True)
-        filename = f"{title_prefix}_keywords_{date_start}_{date_end}_{uuid4().hex[:6]}.png"
+        filename = f"{title_prefix}_sentiment_{start_date}_{end_date}_{uuid4().hex[:6]}.png"
         path = os.path.join(base_dir, filename)
-        plt.tight_layout()
-        plt.savefig(path)
-        plt.close()
-        return path, '\n'.join([f"- {kw}: {fr} 빈도" for kw, fr in rows])
+        fig.write_image(path, format="png")
+        return path
 
-    dom_chart_path, dom_kw_summary = make_chart(dom_rows, "국내")
-    for_chart_path, for_kw_summary = make_chart(for_rows, "해외")
+    # 해외: 단순 빈도 바 차트 생성 함수
+    def make_foreign_bar_chart(rows: List[tuple], title_prefix: str) -> str:
+        """
+        rows: List of tuples [(keyword, freq), ...]
+        title_prefix: "해외"
+        반환값: 로컬에 저장된 차트 파일 경로 (PNG)
+        """
+        labels, freqs = zip(*rows)
+        # Plotly 단순 바 차트 (빈도만)
+        fig = go.Figure(go.Bar(
+            x=list(labels),
+            y=list(freqs),
+            marker_color="skyblue",
+            text=list(freqs),
+            textposition="outside",
+            hovertemplate="%{x}<br>빈도: %{y}<extra></extra>"
+        ))
+        fig.update_layout(
+            title=f"{start_date} ~ {end_date} {title_prefix} 키워드 빈도",
+            xaxis=dict(title="키워드", tickangle=-45),
+            yaxis=dict(title="총 언급 수"),
+            font=dict(family="Noto Sans CJK KR"),
+            height=400,
+            margin=dict(l=40, r=40, t=60, b=100)
+        )
 
+        # 로컬에 이미지 저장
+        base_dir = os.path.abspath("./data/reports")
+        os.makedirs(base_dir, exist_ok=True)
+        filename = f"{title_prefix}_bar_{start_date}_{end_date}_{uuid4().hex[:6]}.png"
+        path = os.path.join(base_dir, filename)
+        fig.write_image(path, format="png")
+        return path
+
+    # 국내/해외 차트 생성
+    dom_chart_path = await make_domestic_sentiment_chart(dom_rows, "국내")
+    for_chart_path = make_foreign_bar_chart(for_rows, "해외")
+
+    # 5) 기사 요약 부분 (기존 로직 유지)
     async def summarize_articles(article_list):
         summaries = []
         for article in article_list:
-            summary = f"- {article['title']} ({article['date']}, {article['media_company']})\n  {article['content'].strip()}"
+            summary = (
+                f"- {article['title']} ({article['date']}, {article['media_company']})\n"
+                f"  {article['content'].strip()}"
+            )
             summaries.append(summary)
         return "\n".join(summaries)
 
     dom_articles = ""
     for kw, _ in dom_rows:
-        articles = await fetch_domestic_articles(kw, date_start, date_end)
+        articles = await fetch_domestic_articles(keyword=kw, start_date=start_date, end_date=end_date)
         dom_articles += f"[국내 키워드: {kw}]\n"
         dom_articles += await summarize_articles(articles) + "\n\n"
 
     for_articles = ""
     for kw, _ in for_rows:
-        articles = await fetch_foreign_articles(kw, date_start, date_end)
+        articles = await fetch_foreign_articles(keyword=kw, start_date=start_date, end_date=end_date)
         for_articles += f"[해외 키워드: {kw}]\n"
         for_articles += await summarize_articles(articles) + "\n\n"
 
+    # LLM 호출
     prompt = PromptTemplate.from_template("""
     당신은 기업 리서치 보고서를 전문적으로 작성하는 AI입니다.
     다음은 국내외 IT 뉴스 키워드 빈도 분석 및 관련 기사 내용을 요약한 결과입니다.
@@ -565,7 +681,7 @@ async def global_it_news_trend_report_tool(date_start=None, date_end=None):
     - 통계/수치가 포함될 경우 자연스럽게 설명에 포함
 
     [분석 기간]
-    {date_start} ~ {date_end}
+    {start_date} ~ {end_date}
 
     [국내 키워드 요약]
     {domestic_keywords}
@@ -581,25 +697,27 @@ async def global_it_news_trend_report_tool(date_start=None, date_end=None):
     """)
 
     chain = LLMChain(
-        llm=ChatOpenAI(model="gpt-4o-mini", temperature=0.3),
+        llm=ChatOpenAI(model="gpt-4.1", temperature=0.3),
         prompt=prompt
     )
 
     result = chain.invoke({
-        "date_start": date_start,
-        "date_end": date_end,
-        "domestic_keywords": dom_kw_summary,
+        "start_date": start_date,
+        "end_date": end_date,
+        "domestic_keywords": "\n".join([f"- {kw}: {freq}번" for kw, freq in dom_rows]),
         "domestic_articles": dom_articles,
-        "foreign_keywords": for_kw_summary,
+        "foreign_keywords": "\n".join([f"- {kw}: {freq}번" for kw, freq in for_rows]),
         "foreign_articles": for_articles
     })
     gpt_text = result["text"]
 
+    # LLM 응답에서 섹션별 본문 추출
     def extract_section(text, title):
         pattern = rf"{title}:\s*(.*?)(?=\n(?:개요|국내 뉴스 분석|해외 뉴스 분석|결론):|\Z)"
         match = re.search(pattern, text, re.DOTALL)
         return match.group(1).strip() if match else "[내용 없음]"
 
+    # DOCX 작성
     doc = Document()
     doc.add_heading("개요", level=1)
     doc.add_paragraph(extract_section(gpt_text, "개요"))
@@ -615,10 +733,11 @@ async def global_it_news_trend_report_tool(date_start=None, date_end=None):
     doc.add_heading("결론", level=1)
     doc.add_paragraph(extract_section(gpt_text, "결론"))
 
-    report_filename = f"Industry_Trend_Report_{date_start}_{date_end}_{uuid4().hex[:8]}.docx"
+    report_filename = f"TrenDB_Report_{start_date}_{end_date}_{uuid4().hex[:8]}.docx"
     report_path = os.path.join("./data/reports", report_filename)
     doc.save(report_path)
 
+    # S3 업로드 및 캐싱
     s3_key = f"report/{os.path.basename(report_path)}"
     s3, bucket = get_s3_client_and_bucket()
     with open(report_path, "rb") as f:
@@ -634,6 +753,242 @@ async def global_it_news_trend_report_tool(date_start=None, date_end=None):
     return url
 
 
+# 경쟁사 목록
+COMPETITORS = [
+    "삼성SDS", "LG CNS", "현대오토에버", "SK주식회사 C&C", "포스코DX",
+    "두산디지털이노베이션", "롯데이노베이트", "CJ올리브네트웍스", "신세계아이앤씨",
+    "현대IT&E", "농협정보시스템", "하나금융티아이", "아시아나IDT",
+    "한진정보통신", "코오롱벤티트", "kt ds", "교보DTS"
+]
+
+@tool(args_schema=CompetitorAnalysisSchema)
+async def competitor_analysis_tool(
+    start_date: str,
+    end_date: str
+) -> Dict[str, Union[str, List[Dict[str, Union[str, int, float, List[Dict[str, str]]]]]]]:
+    """
+    Competitor Analysis Tool
+
+    When to use:
+        - When a consolidated competitor analysis is required for a specific time range.
+        - When calculating competitor-wise mention frequency and sentiment distribution.
+        - When generating a visualization (stacked sentiment bar chart) and retrieving up to three sample articles per competitor.
+
+    Args:
+        start_date (str): Analysis start date (YYYY-MM-DD).
+        end_date   (str): Analysis end date (YYYY-MM-DD).
+
+    Notes:
+        - Aggregates data for the period [start_date] to [end_date].
+        - Uses Elasticsearch filter and sub-aggregations to compute mention counts and sentiment counts per competitor.
+        - Generates one Plotly stacked-bar chart where 각 바의 높이는 “긍정 / 중립 / 부정” 실제 건수로 구성됩니다.
+        - Uploads chart to S3 and returns its presigned URL.
+        - Retrieves up to three representative articles per competitor using fetch_domestic_articles.
+    """
+
+    # Elasticsearch 클라이언트 초기화
+    es = get_es_client()
+    index = os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME")
+    if not index:
+        return {"error": "환경 변수 ELASTICSEARCH_DOMESTIC_INDEX_NAME이 설정되어 있지 않습니다."}
+
+    competitors_data: List[Dict[str, Any]] = []
+
+    for comp in COMPETITORS:
+        # Elasticsearch 언급량 집계
+        try:
+            resp_agg = es.search(
+                index=index,
+                body={
+                    "size": 0,
+                    "query": {
+                        "bool": {
+                            "must": [
+                                {
+                                    "bool": {
+                                        "should": [
+                                            {"match_phrase": {"title": comp}},
+                                            {"match_phrase": {"content": comp}}
+                                        ],
+                                        "minimum_should_match": 1
+                                    }
+                                },
+                                {
+                                    "range": {
+                                        "date": {
+                                            "gte": f"{start_date}T00:00:00",
+                                            "lte": f"{end_date}T23:59:59"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            )
+            mention_count = resp_agg.get("hits", {}).get("total", {}).get("value", 0)
+        except Exception:
+            mention_count = 0
+
+        # fetch_sentiment_distribution 호출 → 비율(%) 가져오기
+        try:
+            sent = await fetch_sentiment_distribution(
+                keyword=comp,
+                start_date=start_date,
+                end_date=end_date,
+                index=index
+            )
+            pos_pct = int(sent.get("positive_percent", 0))
+            neu_pct = int(sent.get("neutral_percent", 0))
+            neg_pct = int(sent.get("negative_percent", 0))
+        except Exception:
+            pos_pct = neu_pct = neg_pct = 0
+
+        # 비율(%) × 언급량 → 절대 값(정수)
+        positive_count = int(mention_count * pos_pct / 100)
+        neutral_count = int(mention_count * neu_pct / 100)
+        negative_count = int(mention_count * neg_pct / 100)
+
+        # 대표 기사 5건 가져오기
+        try:
+            search_res = es.search(
+                index=index,
+                body={
+                    "query": {
+                        "bool": {
+                            "must": [
+                                {
+                                    "multi_match": {
+                                        "query": comp,
+                                        "type": "phrase",
+                                        "fields": ["title^2", "content"]
+                                    }
+                                },
+                                {
+                                    "range": {
+                                        "date": {
+                                            "gte": start_date,
+                                            "lte": end_date
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "size": 5,
+                    "sort": [{"date": {"order": "desc"}}]
+                }
+            )
+            hits = search_res.get("hits", {}).get("hits", [])
+            articles = []
+            for hit in hits:
+                source = hit["_source"]
+                content_snippet = hit.get("highlight", {}).get("content", [source.get("content", "")[:500]])[0]
+                articles.append({
+                    "title": source.get("title", ""),
+                    "content": content_snippet,
+                    "date": source.get("date", ""),
+                    "url": source.get("url", "")
+                })
+        except Exception:
+            articles = []
+
+        competitors_data.append({
+            "name": comp,
+            "article_count": mention_count,
+            "positive_pct": pos_pct,
+            "neutral_pct": neu_pct,
+            "negative_pct": neg_pct,
+            "positive_count": positive_count,
+            "neutral_count": neutral_count,
+            "negative_count": negative_count,
+            "articles": articles
+        })
+
+    # 언급량 0인 경쟁사는 제외
+    filtered = [c for c in competitors_data if c["article_count"] > 0]
+
+    # 언급량 내림차순 정렬
+    filtered.sort(key=lambda x: x["article_count"], reverse=True)
+
+    # 스택 바 차트 그릴 데이터 준비
+    names = [c["name"] for c in filtered]
+    pos_vals = [c["positive_count"] for c in filtered]
+    neu_vals = [c["neutral_count"] for c in filtered]
+    neg_vals = [c["negative_count"] for c in filtered]
+    total_vals = [c["article_count"] for c in filtered]
+
+    # 9) Plotly로 Stacked Bar Chart 생성
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=names,
+        y=pos_vals,
+        name="긍정 건수",
+        marker_color="seagreen",
+        text=pos_vals,
+        textposition="inside",
+        hovertemplate="%{x}<br>긍정: %{y}<extra></extra>"
+    ))
+    fig.add_trace(go.Bar(
+        x=names,
+        y=neu_vals,
+        name="중립 건수",
+        marker_color="lightgray",
+        text=neu_vals,
+        textposition="inside",
+        hovertemplate="%{x}<br>중립: %{y}<extra></extra>"
+    ))
+    fig.add_trace(go.Bar(
+        x=names,
+        y=neg_vals,
+        name="부정 건수",
+        marker_color="salmon",
+        text=neg_vals,
+        textposition="inside",
+        hovertemplate="%{x}<br>부정: %{y}<extra></extra>"
+    ))
+
+    fig.update_layout(
+        barmode="stack",
+        title=f"{start_date} ~ {end_date} 경쟁사 언급량 및 감성분포",
+        xaxis=dict(
+            title="경쟁사",
+            tickangle=-45
+        ),
+        yaxis=dict(
+            title="언급 건수",
+            range=[0, max(total_vals) * 1.1]
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        font=dict(family="Noto Sans CJK KR"),
+        height=500,
+        margin=dict(l=40, r=40, t=80, b=120)
+    )
+
+    # S3 업로드
+    combined_key = f"competitor/combined_{start_date}_{end_date}_{uuid4().hex[:6]}.png"
+    combined_chart_url = upload_chart_to_s3(fig, combined_key)
+
+    # 최종 응답
+    result = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "combined_chart_url": combined_chart_url,
+        "competitors": filtered
+    }
+
+    # Redis 캐시 (7일)
+    r = get_redis_client()
+    cache_key = f"competitor_analysis:{start_date}:{end_date}"
+    r.setex(cache_key, timedelta(days=7), json.dumps(result, ensure_ascii=False))
+
+    return result
 
 @tool(args_schema=GoogleTrendsSchema)
 @async_time_logger("google_trends_tool")
@@ -1028,7 +1383,7 @@ async def community_search_tool(
         posts = [post for post in results_sorted if post["source"] == plat][:per_platform]
         balanced_results.extend(posts)
 
-    # 부족한 경우 남은 거 채우기
+    # 게시물 부족한 경우
     remaining = [post for post in results_sorted if post not in balanced_results]
     needed = max_results - len(balanced_results)
     balanced_results.extend(remaining[:needed])
@@ -1302,16 +1657,16 @@ async def namuwiki_tool(keyword: str) -> List[Dict[str, Any]]:
 @async_time_logger("stock_history_tool")
 async def stock_history_tool(
     symbol: str,
-    start: str,
-    end: str,
+    start_date: str,
+    end_date: str,
 ) -> Dict[str, Any]:
     """
     Unified Stock OHLCV Retrieval Tool (Global + Korean)
 
     Args:
         symbol (str): Stock ticker (e.g., 'AAPL') or 6-digit Korean stock code (e.g., '005930').
-        start (str): Start date in 'YYYY-MM-DD' format.
-        end (str): End date in 'YYYY-MM-DD' format.
+        start_date (str): Start date in 'YYYY-MM-DD' format.
+        end_date (str): End date in 'YYYY-MM-DD' format.
 
     Returns:
         dict: {
@@ -1337,13 +1692,13 @@ async def stock_history_tool(
 
     try:
         if is_korean_symbol(symbol):
-            df = fdr.DataReader(symbol, start=start, end=end)
+            df = fdr.DataReader(symbol, start=start_date, end=end_date)
             info = {}
         else:
             ticker = yf.Ticker(symbol)
             df = ticker.history(
-                start=start,
-                end=end,
+                start=start_date,
+                end=end_date,
                 interval="1d",
                 auto_adjust=True,
                 back_adjust=False
@@ -1571,8 +1926,9 @@ tools = [
     web_search_tool,
     domestic_it_news_search_tool,
     foreign_news_search_tool,
-    global_it_news_trend_report_tool,
-    it_news_trend_keyword_tool,
+    competitor_analysis_tool,
+    trend_report_tool,
+    trend_keyword_tool,
     google_trends_tool,
     community_search_tool,
     youtube_video_tool,
