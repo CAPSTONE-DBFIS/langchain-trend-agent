@@ -28,6 +28,7 @@ class CommunitySearchSchema(BaseModel):
 class SearchWebSchema(BaseModel):
     keyword: str = Field(..., description="Search keyword")
     max_results: int = Field(10, description="Maximum number of results (1-20)")
+    include_images: bool = Field(False, description="Include images in search results")
 
 class YoutubeVideoSchema(BaseModel):
     query: str = Field(..., description="Search keyword")

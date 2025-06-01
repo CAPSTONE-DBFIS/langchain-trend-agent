@@ -781,7 +781,6 @@ async def competitor_analysis_tool(
     Notes:
         - Aggregates data for the period [start_date] to [end_date].
         - Uses Elasticsearch filter and sub-aggregations to compute mention counts and sentiment counts per competitor.
-        - Generates one Plotly stacked-bar chart where 각 바의 높이는 “긍정 / 중립 / 부정” 실제 건수로 구성됩니다.
         - Uploads chart to S3 and returns its presigned URL.
         - Retrieves up to three representative articles per competitor using fetch_domestic_articles.
     """
@@ -918,7 +917,7 @@ async def competitor_analysis_tool(
     neg_vals = [c["negative_count"] for c in filtered]
     total_vals = [c["article_count"] for c in filtered]
 
-    # 9) Plotly로 Stacked Bar Chart 생성
+    # Plotly로 Stacked Bar Chart 생성
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=names,
@@ -1448,7 +1447,7 @@ async def youtube_video_tool(
 
 @tool(args_schema=SearchWebSchema)
 @async_time_logger("web_search_tool")
-async def web_search_tool(keyword: str, max_results: int=10) -> List[Dict[str, str]]:
+async def web_search_tool(keyword: str, max_results: int = 10, include_images: bool = False) -> List[Dict[str, str]]:
     """
     Real-time Web Page Search Tool using Tavily API
 
@@ -1460,6 +1459,7 @@ async def web_search_tool(keyword: str, max_results: int=10) -> List[Dict[str, s
     Args:
         keyword (str): Search keyword
         max_results (int, optional): Maximum number of results (1-20, default 10)
+        include_images (bool, optional): Include images in search results
 
     Returns:
         List[Dict[str, str]]: List of search results with title, content, and URL
@@ -1467,15 +1467,13 @@ async def web_search_tool(keyword: str, max_results: int=10) -> List[Dict[str, s
     try:
         tavily_tool = TavilySearch(
             max_results=max_results,
-            include_images=True
+            include_images=include_images
         )
         result = await tavily_tool.ainvoke({"query": keyword})
-        logger.info(f"Tavily search result: {result}")
         return result
     except Exception as e:
         logger.error(f"Tavily search failed: {str(e)}")
         return []
-
 
 @tool(args_schema=RequestUrlSchema)
 @async_time_logger("request_url_tool")
