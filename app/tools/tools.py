@@ -1662,16 +1662,16 @@ async def namuwiki_tool(keyword: str) -> List[Dict[str, Any]]:
 @async_time_logger("stock_history_tool")
 async def stock_history_tool(
     symbol: str,
-    start: str,
-    end: str,
+    start_date: str,
+    end_date: str,
 ) -> Dict[str, Any]:
     """
     Unified Stock OHLCV Retrieval Tool (Global + Korean)
 
     Args:
         symbol (str): Stock ticker (e.g., 'AAPL') or 6-digit Korean stock code (e.g., '005930').
-        start (str): Start date in 'YYYY-MM-DD' format.
-        end (str): End date in 'YYYY-MM-DD' format.
+        start_date (str): Start date in 'YYYY-MM-DD' format.
+        end_date (str): End date in 'YYYY-MM-DD' format.
 
     Returns:
         dict: {
@@ -1697,13 +1697,13 @@ async def stock_history_tool(
 
     try:
         if is_korean_symbol(symbol):
-            df = fdr.DataReader(symbol, start=start, end=end)
+            df = fdr.DataReader(symbol, start=start_date, end=end_date)
             info = {}
         else:
             ticker = yf.Ticker(symbol)
             df = ticker.history(
-                start=start,
-                end=end,
+                start=start_date,
+                end=end_date,
                 interval="1d",
                 auto_adjust=True,
                 back_adjust=False
