@@ -47,39 +47,41 @@ class AgentChatService:
 
     # 링크를 수집할 도구 목록
     linkable_tools = [
-        "domestic_it_news_search_tool",
+        "domestic_news_search_tool",
         "foreign_news_search_tool",
+        "trend_keyword_tool",
+        "competitor_analysis_tool",
         "community_search_tool",
         "web_search_tool",
         "youtube_video_tool",
         "request_url_tool",
-        "it_news_trend_keyword_tool",
         "paper_search_tool"
     ]
 
     TOOL_NAME_MAP = {
-        "domestic_it_news_search_tool": "국내 뉴스 검색 중",
+        "domestic_news_search_tool": "국내 뉴스 검색 중",
         "foreign_news_search_tool": "해외 뉴스 검색 중",
+        "trend_keyword_tool": "국내 뉴스 트렌드 키워드 분석 중",
+        "competitor_analysis_tool": "경쟁사 분석 중",
+        "trend_report_tool": "글로벌 뉴스 트렌드 보고서 생성 중",
         "community_search_tool": "커뮤니티 게시물 검색 중",
         "web_search_tool": "웹 검색 중",
         "youtube_video_tool": "YouTube 정보 검색 중",
         "request_url_tool": "웹페이지 분석 중",
-        "it_news_trend_keyword_tool": "국내 뉴스 트렌드 키워드 분석 중",
         "google_trends_tool": "구글 트렌드 분석 중",
         "wikipedia_tool": "위키피디아 검색 중",
         "namuwiki_tool": "나무위키 검색 중",
         "stock_history_tool": "주식 데이터 조회 중",
-        "global_it_news_trend_report_tool": "글로벌 뉴스 트렌드 보고서 생성 중",
         "paper_search_tool": "논문 검색 중",
         "dalle3_image_generation_tool": "이미지 생성 중"
     }
 
     # 도구별 출력 키 매핑
     TOOL_DATA_KEYS = {
+        "domestic_news_search_tool": "results",
         "foreign_news_search_tool": "results",
-        "it_news_trend_keyword_tool": "keywords",
+        "trend_keyword_tool": "keywords",
         "community_search_tool": "results",
-        "domestic_it_news_search_tool": "results",
         "web_search_tool": "results",
         "paper_search_tool": "results",
         "youtube_video_tool": None,
@@ -175,7 +177,6 @@ class AgentChatService:
         You are TRENDB, an advanced AI agent specialized in researching, analyzing, and summarizing the latest trend information.
         Your mission is to invoke appropriate "tools" according to the user's query and deliver accurate, detailed, and comprehensive answers based solely on the tool output.
         Your responses must be independent, well-structured, and written in fluent Korean that fully reflects the defined persona’s tone and speaking style. If the persona specifies a tone (e.g., humorous, casual, serious), that tone must take precedence over default journalistic formality.
-        If the user query contains “알려줘”, “뭐야”, “이게 뭐야”, “자세히 설명해줘”, you MUST reinterpret it as a tool-dependent information request and invoke appropriate tools accordingly.
         You are never allowed to respond based on prior responses or your internal knowledge, even for definition-style questions. There is NO exception to this rule.
         <Persona>
         - Persona name: {persona_name}, Prompt: {persona_prompt}
@@ -192,7 +193,9 @@ class AgentChatService:
         </Query Types>
 
         <Tool Usage Rules>
-        - Understand query intent and decompose complex queries into subtasks, using 1–3 relevant tools (e.g., web_search_tool, it_news_trend_keyword_tool).
+        - Understand the user’s intent and choose tools accordingly:
+          • If the user "asks" for trend keywords,(e.g., "이번주 트렌드 알려줘"), call `trend_keyword_tool`.
+          • If the user explicitly requests a “report” (e.g., “이번주 트렌드 레포트 작성해줘”), call `trend_report_tool`.
         - Always prefer web_search_tool for broad queries; retry with revised queries or alternative tools if output is irrelevant.
         - If tool output is insufficient, provide a partial answer based on available data, noting limitations transparently.
         - Never mention tool names or internal processes in the answer.
@@ -200,47 +203,20 @@ class AgentChatService:
         </Tool Usage Rules>
 
         <Tool Usage Example>
-        User Query: "삼성전자 관련 최근 IT 뉴스 보여줘"
-        Tool Calls: domestic_it_news_search_tool, foreign_news_search_tool
-
-        User Query: "AI 관련 트렌드 알려줘"
-        Tool Calls: domestic_it_news_search_tool, foreign_news_search_tool, google_trends_tool
-
-        User Query: "어제 트렌드 키워드 알려줘"
-        Tool Calls: it_news_trend_keyword_tool
-
-        User Query: "어제 트렌드 보고서 작성해줘"
-        Tool Calls: global_it_news_trend_report_tool
-
-        User Query: "SKT 관련 최근 뉴스 찾아줘"
-        Tool Calls: web_search_tool, domestic_it_news_search_tool
-
-        User Query: "(URL)에 들어가서 무슨 내용인지 정리해줘"
-        Tool Calls: request_url_tool
-
-        User Query: "ai가 뭔지 알려줘"
-        Tool Calls: wikipedia_tool, web_search_tool
-
-        User Query: "일론 머스크에 대한 나무위키 문서를 검색해줘"
-        Tool Calls: namuwiki_tool, web_search_tool
-
-        User Query: "ai에 대한 구글 트렌드 일주일 관심도 변화를 알려줘"
-        Tool Calls: google_trends_tool
-
-        User Query: "엔비디아 주가 한달 추이 알려줘"
-        Tool Calls: stock_history_tool, foreign_news_search_tool
-
-        User Query: "닌텐도 스위치2에 대한 커뮤니티 반응을 알려줘"
-        Tool Calls: community_search_tool, web_search_tool
-
-        User Query: "~에 대한 유튜브 영상 찾아줘"
-        Tool Calls: youtube_video_tool, web_search_tool
-
-        User Query: "~ 스타일의 이미지를 생성해줘"
-        Tool Calls: dalle3_image_generation_tool
-
-        User Query: "ai agent 관련 최근 논문 찾아줘"
-        Tool Calls: paper_search_tool, web_search_tool
+        - “삼성전자 관련 최근 IT 뉴스 보여줘”  → domestic_news_search_tool, foreign_news_search_tool
+        - “AI 관련 트렌드 알려줘”  → domestic_news_search_tool, foreign_news_search_tool, google_trends_tool
+        - “어제 트렌드 키워드 알려줘”  → trend_keyword_tool
+        - “일주일 트렌드 보고서 작성해줘”  → trend_report_tool
+        - “SKT 관련 최근 뉴스 찾아줘”  → web_search_tool, domestic_news_search_tool
+        - “(URL)에 들어가서 무슨 내용인지 정리해줘”  → request_url_tool
+        - “ai가 뭔지 알려줘”  → wikipedia_tool, web_search_tool
+        - “일론 머스크 나무위키 검색해줘”  → namuwiki_tool, web_search_tool
+        - “ai에 대한 구글 트렌드 일주일 관심도 변화 알려줘”  → google_trends_tool
+        - “엔비디아 주가 한달 추이 알려줘”  → stock_history_tool, foreign_news_search_tool
+        - “닌텐도 스위치2 커뮤니티 반응 알려줘”  → community_search_tool, web_search_tool
+        - “~에 대한 유튜브 영상 찾아줘”  → youtube_video_tool, web_search_tool
+        - “~ 스타일의 이미지를 생성해줘”  → dalle3_image_generation_tool
+        - “ai agent 관련 최근 논문 찾아줘”  → paper_search_tool, web_search_tool
         </Tool Usage Example>
 
         <Format Rules>
@@ -456,15 +432,8 @@ class AgentChatService:
         results = []
         key = AgentChatService.TOOL_DATA_KEYS.get(tool_name)
 
-        # it_news_trend_keyword_tool의 경우 keywords[].articles[] 처리
-        if tool_name == "it_news_trend_keyword_tool" and isinstance(obs_raw, dict) and "keywords" in obs_raw:
-            # main_chart_url 처리
-            if obs_raw.get("main_chart_url"):
-                results.append({
-                    "title": "키워드 빈도 차트",
-                    "content": obs_raw.get("chart_description", "주요 키워드 빈도 차트"),
-                    "url": obs_raw["main_chart_url"]
-                })
+        # trend_keyword_tool 처리
+        if tool_name == "trend_keyword_tool" and isinstance(obs_raw, dict) and "keywords" in obs_raw:
             # articles 처리
             for keyword_item in obs_raw["keywords"]:
                 if "articles" in keyword_item:
@@ -472,6 +441,15 @@ class AgentChatService:
                         extracted = extract_item(article, default_title=article.get("title", "기사 요약"))
                         if extracted["content"] or extracted["url"]:
                             results.append(extracted)
+            return results
+
+        # competitor_analysis_tool 처리
+        if tool_name == "competitor_analysis_tool" and isinstance(obs_raw, dict):
+            for comp in obs_raw.get("competitors", []):
+                for art in comp.get("articles", []):
+                    extracted = extract_item(art, default_title=art.get("title", "제목 없음"))
+                    if extracted["content"] or extracted["url"]:
+                        results.append(extracted)
             return results
 
         if isinstance(key, list):

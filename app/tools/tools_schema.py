@@ -1,10 +1,10 @@
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, Annotated
 
-class DomesticITNewsSearchSchema(BaseModel):
+class DomesticNewsSearchSchema(BaseModel):
     keyword: str = Field(..., description="Primary keyword for search")
-    date_start: Optional[str] = Field(None, description="Search start date (YYYY-MM-DD), defaults to 60 days ago")
-    date_end: Optional[str] = Field(None, description="Search end date (YYYY-MM-DD), defaults to yesterday")
+    start_date: Optional[str] = Field(None, description="Search start date (YYYY-MM-DD), defaults to 60 days ago")
+    end_date: Optional[str] = Field(None, description="Search end date (YYYY-MM-DD), defaults to yesterday")
     max_result: int = Field(
         10, ge=1, le=20, description="Maximum number of results to return (1–20, default 10)"
     )
@@ -14,6 +14,10 @@ class ForeignNewsSearchSchema(BaseModel):
     lang: str = Field("en", description="Language code, defaults to 'en'")
     country: str = Field("us", description="Country code, defaults to 'us'")
     max_results: int = Field(10, description="Maximum number of articles (default 10, max 20)")
+
+class CompetitorAnalysisSchema(BaseModel):
+    start_date: str = Field( ..., description="Search start date (YYYY-MM-DD)")
+    end_date: str = Field(...,description="Search end date (YYYY-MM-DD), defaults to yesterday")
 
 class CommunitySearchSchema(BaseModel):
     korean_keyword: str = Field(..., description="Korean keyword for search")
@@ -42,11 +46,11 @@ class GoogleTrendsSchema(BaseModel):
     start_date: Optional[str] = Field(None, description="Start date (YYYY-MM-DD), defaults to last month")
     end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
 
-class GlobalITNewsTrendReportSchema(BaseModel):
-    date_start: Optional[str] = Field(None, description="Start date (YYYY-MM-DD), defaults to yesterday")
-    date_end: Optional[str] = Field(None, description="End date (YYYY-MM-DD), defaults to yesterday")
+class TrendReportSchema(BaseModel):
+    start_date: Optional[str] = Field(None, description="Start date (YYYY-MM-DD), defaults to yesterday")
+    end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD), defaults to yesterday")
 
-class ITNewsTrendKeywordSchema(BaseModel):
+class TrendKeywordSchema(BaseModel):
     period: str = Field(..., description="'daily' or 'weekly'")
     date: str = Field(..., description="Reference date (YYYY-MM-DD)")
 
@@ -55,8 +59,8 @@ class NamuwikiSchema(BaseModel):
 
 class StockHistorySchema(BaseModel):
     symbol: str = Field(..., description="Ticker symbol")
-    start: str = Field(..., description="Start date (YYYY-MM-DD)")
-    end: str = Field(..., description="End date (YYYY-MM-DD)")
+    start_date: str = Field(..., description="Start date (YYYY-MM-DD)")
+    end_date: str = Field(..., description="End date (YYYY-MM-DD)")
 
 class Dalle3ImageGenerationSchema(BaseModel):
     prompt: str = Field(..., description="Prompt for image generation")
