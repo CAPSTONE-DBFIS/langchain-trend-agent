@@ -62,22 +62,23 @@ langchain-trend-agent
 ---
 
 ## 구현된 도구
-| 도구명                   | 설명                                                                                                                     | 주요 옵션                                                                                                            |
-|------------------------|------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|
-| 트렌드 키워드 분석 도구       | DB에 저장된 국내 IT 뉴스 키워드 데이터를 조회하여, 지정 기간(일간/주간/월간) 상위 키워드 빈도와 감정 분포(긍정/중립/부정)를 집계한 뒤 스택형 바 차트와 해당 키워드별 기사 목록을 반환합니다. | `period`: 'daily'/'weekly'/'monthly'<br>`date`: 'YYYY-MM-DD' |
-| 국내 IT 뉴스 검색 도구       | Elasticsearch에 저장된 국내 IT 뉴스 인덱스에서 키워드를 기반으로 지정 날짜 범위 내 최신 순으로 최대 개수의 기사를 검색해 제목, 요약, 날짜, URL, 매체 정보를 반환합니다.              | `keyword`: 문자열<br>`start_date`: 'YYYY-MM-DD' (기본 60일 전)<br>`end_date`: 'YYYY-MM-DD' (기본 어제)<br>`max_results`: 정수 (기본 10) |
-| 해외 IT 뉴스 검색 도구       | GNews API를 이용해 영어 키워드 기반 해외 IT 뉴스 기사를 검색하고 제목, 본문 요약, 날짜, URL, 매체 정보를 반환합니다.                                                   | `en_keyword`: 문자열<br>`lang`: 문자열 (기본 'en')<br>`country`: 문자열 (기본 'us')<br>`max_results`: 정수 (기본 10)      |
-| 트렌드 리포트 생성 도구      | 국내·해외 IT 뉴스 상위 키워드 빈도 및 감정 분포 차트를 생성하고 기사 요약과 함께 서술형 보고서를 DOCX 파일로 만들어 다운로드 가능한 S3 URL을 반환합니다.                     | `start_date`: 'YYYY-MM-DD' (기본 어제)<br>`end_date`: 'YYYY-MM-DD' (기본 어제)                                         |
-| 경쟁사 분석 도구            | 미리 정의된 경쟁사 목록을 기준으로 Elasticsearch에서 언급량과 감정 분포를 집계하여 스택형 바 차트를 생성하고 각 경쟁사별 대표 기사 목록을 반환합니다.                       | `start_date`: 'YYYY-MM-DD'<br>`end_date`: 'YYYY-MM-DD'                                                              |
-| 구글 트렌드 도구           | PyTrends를 사용해 지정 키워드의 Google 트렌드 관심도 시계열 데이터를 조회하고 선 그래프를 생성하여 S3 URL과 함께 관심도 데이터를 반환합니다.                               | `query`: 문자열<br>`start_date`: 'YYYY-MM-DD' (기본 1개월 전)<br>`end_date`: 'YYYY-MM-DD' (기본 오늘)                     |
-| 커뮤니티 검색 도구          | Naver/Daum 블로그, Reddit, X(Twitter)에서 병렬로 게시물을 검색하여 플랫폼별 균등 분배 후 최신 순으로 결과를 반환하며 오류 발생 시 에러 정보를 함께 제공합니다.               | `korean_keyword`: 문자열<br>`english_keyword`: 문자열<br>`platform`: 'all'/'daum'/'naver'/'reddit'/'x'<br>`max_results`: 정수 (기본 20)    |
-| 유튜브 검색 도구           | YouTube Data API를 통해 키워드 기반으로 동영상을 검색하고 videoId, 제목, 설명, 채널, 게시일, 썸네일 URL, 동영상 URL 정보를 반환합니다.                                      | `query`: 문자열<br>`max_results`: 정수 (1~10, 기본 5)<br>`order`: 문자열 ('relevance'/'date'/'viewCount' 등, 기본 'relevance') |
-| 웹페이지/문서 추출 도구       | HTML 또는 PDF URL에서 본문 텍스트를 추출하여 반환하며 HTML은 본문 최대 5000자, PDF는 전체 내용을 추출합니다.                                                           | `input_url`: 문자열                                                                                                   |
-| 위키피디아 검색 도구         | 한국어 위키피디아를 우선 검색해 요약을 제공하고 실패 시 영어 위키피디아를 대체하여 최대 1500자 요약 결과를 반환합니다.                                                   | `query`: 문자열                                                                                                      |
-| 나무위키 검색 도구          | 나무위키 문서를 크롤링하여 불필요한 요소를 제거한 뒤 최대 30개의 유효 문단을 반환합니다.                                                                              | `keyword`: 문자열                                                                                                    |
-| 주식 조회 도구            | FinanceDataReader 또는 yfinance를 통해 글로벌 또는 한국 주식의 OHLCV 데이터를 조회하고 종가·거래량 차트를 생성하여 S3 URL과 함께 반환합니다.                                  | `symbol`: 문자열 (영문 티커 또는 6자리 한국 코드)<br>`start_date`: 'YYYY-MM-DD'<br>`end_date`: 'YYYY-MM-DD'                      |
-| 이미지 생성 도구           | ChatOpenAI(GPT-4o-mini)를 사용해 한국어 프롬프트를 영어로 변환한 뒤 DALL·E 3로 고품질 이미지를 생성하여 URL을 반환합니다.                                                | `prompt`: 문자열                                                                                                      |
-| 논문 검색 도구            | OpenAlex API를 이용해 학술 논문을 검색하고 논문 제목, 초록, 출판일, URL, 저자 정보를 반환합니다.                                                                            | `query`: 문자열<br>`max_results`: 정수 (1~10, 기본 10)<br>`start_date`: 'YYYY-MM-DD' (기본 90일 전)<br>`end_date`: 'YYYY-MM-DD' (기본 오늘)<br>`sort_by`: 'relevance'/'date' |
+| 도구명                   | 설명                                                                                                                     | 주요 옵션                                                                                                                           |
+|------------------------|------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
+| 트렌드 키워드 분석 도구       | DB에 저장된 국내 IT 뉴스 키워드 데이터를 조회하여, 지정 기간(일간/주간/월간) 상위 키워드 빈도와 감정 분포(긍정/중립/부정)를 집계한 뒤 스택형 바 차트와 해당 키워드별 기사 목록을 반환합니다. | `period` (string), `date` (string)                                                                                              |
+| 국내 IT 뉴스 검색 도구       | Elasticsearch에 저장된 국내 IT 뉴스 인덱스에서 키워드를 기반으로 지정 날짜 범위 내 최신 순으로 최대 개수의 기사를 검색해 제목, 요약, 날짜, URL, 매체 정보를 반환합니다.              | `keyword` (string), `start_date` (string), `end_date` (string), `max_results` (int)                                                 |
+| 해외 IT 뉴스 검색 도구       | GNews API를 이용해 영어 키워드 기반 해외 IT 뉴스 기사를 검색하고 제목, 본문 요약, 날짜, URL, 매체 정보를 반환합니다.                                                   | `en_keyword` (string), `lang` (string), `country` (string), `max_results` (int)                                                     |
+| 트렌드 리포트 생성 도구      | 국내·해외 IT 뉴스 상위 키워드 빈도 및 감정 분포 차트를 생성하고 기사 요약과 함께 서술형 보고서를 DOCX 파일로 만들어 다운로드 가능한 S3 URL을 반환합니다.                     | `start_date` (string), `end_date` (string)                                                                                          |
+| 웹 검색 도구              | Tavily API를 사용해 키워드 기반 실시간 웹페이지 검색 결과(제목, 내용, URL 등)를 JSON 형태로 반환합니다.                                                                   | `keyword` (string), `max_results` (int), `include_images` (bool)                                                                    |
+| 경쟁사 분석 도구            | 미리 정의된 경쟁사 목록을 기준으로 Elasticsearch에서 언급량과 감정 분포를 집계하여 스택형 바 차트를 생성하고 각 경쟁사별 대표 기사 목록을 반환합니다.                       | `start_date` (string), `end_date` (string)                                                                                          |
+| 구글 트렌드 도구           | PyTrends를 사용해 지정 키워드의 Google 트렌드 관심도 시계열 데이터를 조회하고 선 그래프를 생성하여 S3 URL과 함께 관심도 데이터를 반환합니다.                               | `query` (string), `start_date` (string), `end_date` (string)                                                                         |
+| 커뮤니티 검색 도구          | Naver/Daum 블로그, Reddit, X(Twitter)에서 병렬로 게시물을 검색하여 플랫폼별 균등 분배 후 최신 순으로 결과를 반환하며 오류 발생 시 에러 정보를 함께 제공합니다.               | `korean_keyword` (string), `english_keyword` (string), `platform` (string), `max_results` (int)                                       |
+| 유튜브 검색 도구           | YouTube Data API를 통해 키워드 기반으로 동영상을 검색하고 videoId, 제목, 설명, 채널, 게시일, 썸네일 URL, 동영상 URL 정보를 반환합니다.                                      | `query` (string), `max_results` (int), `order` (string)                                                                              |
+| 웹페이지/문서 추출 도구       | HTML 또는 PDF URL에서 본문 텍스트를 추출하여 반환하며 HTML은 본문 최대 5000자, PDF는 전체 내용을 추출합니다.                                                           | `input_url` (string)                                                                                                                  |
+| 위키피디아 검색 도구         | 한국어 위키피디아를 우선 검색해 요약을 제공하고 실패 시 영어 위키피디아를 대체하여 최대 1500자 요약 결과를 반환합니다.                                                   | `query` (string)                                                                                                                       |
+| 나무위키 검색 도구          | 나무위키 문서를 크롤링하여 불필요한 요소를 제거한 뒤 최대 30개의 유효 문단을 반환합니다.                                                                              | `keyword` (string)                                                                                                                     |
+| 주식 조회 도구            | FinanceDataReader 또는 yfinance를 통해 글로벌 또는 한국 주식의 OHLCV 데이터를 조회하고 종가·거래량 차트를 생성하여 S3 URL과 함께 반환합니다.                                  | `symbol` (string), `start_date` (string), `end_date` (string)                                                                          |
+| 이미지 생성 도구           | ChatOpenAI(GPT-4o-mini)를 사용해 한국어 프롬프트를 영어로 변환한 뒤 DALL·E 3로 고품질 이미지를 생성하여 URL을 반환합니다.                                                | `prompt` (string)                                                                                                                      |
+| 논문 검색 도구            | OpenAlex API를 이용해 학술 논문을 검색하고 논문 제목, 초록, 출판일, URL, 저자 정보를 반환합니다.                                                                            | `query` (string), `max_results` (int), `start_date` (string), `end_date` (string), `sort_by` (string)                                  |
 ---
 
 ## 기술 스택 및 브랜치 전략
@@ -103,11 +104,11 @@ langchain-trend-agent
 ### 서버 아키텍처
 ![system_architecture.png](images/system_architecture.png)
 
-| 서버 종류             | 주요 역할                  | 구성 및 설명                                                                         |
-|-------------------|------------------------|---------------------------------------------------------------------------------|
-| 메인 Application 서버 | 프론트엔드 및 사용자 요청 백엔드 처리  | React + FastAPI + Spring 연동                                                     |
-| DB 서버             | 데이터 저장 및 검색 인프라 구성     | Elasticsearch + Milvus + Redis + PostgreSQL                                     |
-| 크롤링 서버            | 뉴스 크롤링 및 데이터 파이프라인 자동화 | Jenkins + Python 크롤러, 메인, 연관 키워드 추출 및 klue/bert-base 감정 분류 모델 구동 파이프라인 주기적 스케줄링 |
+| 서버 종류             | 주요 역할                     | 구성 및 설명                                                                        |
+|-------------------|---------------------------|--------------------------------------------------------------------------------|
+| 메인 Application 서버 | 프론트엔드 및 사용자 요청 백엔드 처리     | React + FastAPI + Spring 연동                                                    |
+| DB 서버             | 데이터 저장 및 검색 인프라 구성        | Elasticsearch + Milvus + Redis                                    |
+| 크롤링 서버            | 뉴스 크롤링 및 데이터 분석 파이프라인 자동화 | Jenkins + Python 크롤러, 메인, 연관 키워드 추출 및 klue/bert-base 감정 분류 모델 구동 파이프라인 주기적 스케줄링 |
 
 ### 서버 권장 사양
 
@@ -152,9 +153,9 @@ uvicorn app.main:app --reload
 ## 로깅 및 모니터링
 
 * FastAPI 로그 확인
-* Redis 캐싱 효율 모니터링
+* Redis 캐싱 모니터링
 * Milvus 관리 도구 Attu 사용
-
+* ElasticSearch 관리 도구 Kibana 사용
 ---
 
 ## 배포
