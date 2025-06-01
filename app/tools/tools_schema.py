@@ -5,7 +5,7 @@ class DomesticNewsSearchSchema(BaseModel):
     keyword: str = Field(..., description="Primary keyword for search")
     start_date: Optional[str] = Field(None, description="Search start date (YYYY-MM-DD), defaults to 60 days ago")
     end_date: Optional[str] = Field(None, description="Search end date (YYYY-MM-DD), defaults to yesterday")
-    max_result: int = Field(
+    max_results: int = Field(
         10, ge=1, le=20, description="Maximum number of results to return (1–20, default 10)"
     )
 
@@ -34,6 +34,7 @@ class YoutubeVideoSchema(BaseModel):
     max_results: int = Field(
         5, ge=1, le=10, description="Maximum number of results to return (1–10, default 5)"
     )
+    order: str = Field("relevance", description="Sorting method: 'relevance', 'date', 'viewCount'")
 
 class RequestUrlSchema(BaseModel):
     input_url: str = Field(..., description="Absolute URL of an HTTP(S) webpage or PDF file")

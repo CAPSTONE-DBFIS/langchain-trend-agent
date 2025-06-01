@@ -5,17 +5,14 @@ import logging
 import os
 import re
 import time
-import platform
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Dict, List, Union
 from urllib.parse import quote
 from uuid import uuid4
 
-from matplotlib import font_manager as fm
 import aiohttp
 import FinanceDataReader as fdr
-import matplotlib.pyplot as plt
 import openai
 import pandas as pd
 import plotly.express as px
@@ -76,7 +73,7 @@ async def domestic_it_news_search_tool(
     keyword: str,
     start_date: str | None = None,
     end_date: str | None = None,
-    max_result:int = 10,
+    max_results:int = 10,
 ) -> Dict[str, Any]:
     """
     Domestic IT News Search Tool
@@ -89,7 +86,7 @@ async def domestic_it_news_search_tool(
         keyword (str): Primary keyword for search
         start_date (str, optional): Search start date (YYYY-MM-DD), defaults to 60 days ago
         end_date (str, optional): Search end date (YYYY-MM-DD), defaults to yesterday
-        max_result (int, optional): Maximum number of articles (default 10)
+        max_results (int, optional): Maximum number of articles (default 10)
 
 
     Returns:
@@ -164,7 +161,7 @@ async def domestic_it_news_search_tool(
             {"_score": {"order": "desc"}}
         ],
         "from": 0,
-        "size": max_result
+        "size": max_results
     }
 
     try:
@@ -307,7 +304,7 @@ async def trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any]:
     if (cached := r.get(cache_key)):
         return json.loads(cached)
 
-    # 1) 기간 계산
+    # 기간 계산
     if period == "daily":
         start_date = end_date = date
     elif period == "weekly":
@@ -319,7 +316,7 @@ async def trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any]:
     else:
         return {"error": "Period must be 'daily', 'weekly', or 'monthly'."}
 
-    # 2) 상위 10개 키워드+빈도 조회 (PostgreSQL)
+    # 상위 10개 키워드 + 빈도 조회
     conn = get_db_connection()
     cur = conn.cursor()
     if period == "daily":
@@ -351,7 +348,7 @@ async def trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any]:
     keywords = [r0 for r0, _ in rows]
     keyword_freqs = {r0: int(r1) for r0, r1 in rows}
 
-    # 3) 감정 비율 조회
+    # 감정 비율 조회
     sentiment_rows = []
     for kw in keywords:
         sent = await fetch_sentiment_distribution(keyword=kw, start_date=start_date, end_date=end_date)
@@ -367,7 +364,7 @@ async def trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any]:
 
     df_sent = pd.DataFrame(sentiment_rows)
 
-    # 4) 실제 스택 높이 계산: “총 빈도수 * (감정 비율 / 100)”
+    # 실제 스택 높이 계산: “총 빈도수 * (감정 비율 / 100)”
     positive_heights = [
         int(keyword_freqs[kw] * row["positive_pct"] / 100)
         for kw, row in zip(df_sent["keyword"], sentiment_rows)
@@ -381,7 +378,7 @@ async def trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any]:
         for kw, row in zip(df_sent["keyword"], sentiment_rows)
     ]
 
-    # 5) Plotly – stacked bar 생성
+    # Plotly – stacked bar 생성
     fig_main = go.Figure()
 
     fig_main.add_trace(go.Bar(
@@ -400,19 +397,17 @@ async def trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any]:
         hovertemplate="%{x}<br>중립 수: %{y}<extra></extra>"
     ))
 
-    # “부정” trace에만 text 속성을 추가해서, 막대 위에 총 빈도(키워드 빈도)를 표시
     fig_main.add_trace(go.Bar(
         x=df_sent["keyword"],
         y=negative_heights,
         name="부정",
         marker_color="salmon",
         hovertemplate="%{x}<br>부정 수: %{y}<extra></extra>",
-        # ← 여기서 text로 전체 빈도수를 넣고, textposition="outside"로 지정
         text=[keyword_freqs[kw] for kw in df_sent["keyword"]],
         textposition="outside"
     ))
 
-    # 6) 레이아웃 세팅
+    # 레이아웃 세팅
     fig_main.update_layout(
         barmode="stack",
         title=f"{start_date} ~ {end_date} 주요 키워드 빈도수 및 감정 분포",
@@ -435,11 +430,11 @@ async def trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any]:
         margin=dict(l=40, r=40, t=80, b=120)
     )
 
-    # 7) S3에 업로드
+    # S3에 업로드
     key_main = f"{period}/{date}/freq_sentiment_stacked_{uuid4().hex[:6]}.png"
     main_chart_url = upload_chart_to_s3(fig_main, key_main)
 
-    # 8) 각 키워드별 기사 목록 가져오기
+    # 각 키워드별 기사 목록 가져오기
     results = []
     for kw in keywords:
         articles = await fetch_domestic_articles(keyword=kw, start_date=start_date, end_date=end_date)
@@ -460,7 +455,7 @@ async def trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any]:
         "keywords": results
     }
 
-    # 9) 캐시에 저장 (7일)
+    # 캐시에 저장 (7일)
     r.setex(cache_key, timedelta(days=7), json.dumps(output, ensure_ascii=False))
     return output
 
@@ -483,13 +478,13 @@ async def trend_report_tool(start_date=None, end_date=None):
             str: Presigned URL to download the generated DOCX report
     """
 
-    # 1) 캐시 확인
+    # 캐시 확인
     cache_key = f"trend_report:{start_date}:{end_date}"
     r = get_redis_client()
     if cached := r.get(cache_key):
         return cached.decode() if isinstance(cached, bytes) else cached
 
-    # 2) DB에서 상위 10개 국내/해외 키워드 조회
+    # DB에서 상위 10개 국내/해외 키워드 조회
     conn = get_db_connection()
     cur = conn.cursor()
 
@@ -520,7 +515,7 @@ async def trend_report_tool(start_date=None, end_date=None):
     cur.close()
     conn.close()
 
-    # 3-1) 국내용: 감정 분포 스택형 차트 생성 함수
+    # 국내: 감정 분포 스택형 차트 생성 함수
     async def make_domestic_sentiment_chart(rows: List[tuple], title_prefix: str) -> str:
         """
         rows: List of tuples [(keyword, freq), ...]
@@ -613,7 +608,7 @@ async def trend_report_tool(start_date=None, end_date=None):
         fig.write_image(path, format="png")
         return path
 
-    # 3-2) 해외용: 단순 빈도 바 차트 생성 함수
+    # 해외: 단순 빈도 바 차트 생성 함수
     def make_foreign_bar_chart(rows: List[tuple], title_prefix: str) -> str:
         """
         rows: List of tuples [(keyword, freq), ...]
@@ -647,7 +642,7 @@ async def trend_report_tool(start_date=None, end_date=None):
         fig.write_image(path, format="png")
         return path
 
-    # 4) 국내/해외 차트 생성
+    # 국내/해외 차트 생성
     dom_chart_path = await make_domestic_sentiment_chart(dom_rows, "국내")
     for_chart_path = make_foreign_bar_chart(for_rows, "해외")
 
@@ -674,7 +669,7 @@ async def trend_report_tool(start_date=None, end_date=None):
         for_articles += f"[해외 키워드: {kw}]\n"
         for_articles += await summarize_articles(articles) + "\n\n"
 
-    # 6) LLM 프롬프트/응답 (기존 로직 그대로)
+    # LLM 호출
     prompt = PromptTemplate.from_template("""
     당신은 기업 리서치 보고서를 전문적으로 작성하는 AI입니다.
     다음은 국내외 IT 뉴스 키워드 빈도 분석 및 관련 기사 내용을 요약한 결과입니다.
@@ -716,13 +711,13 @@ async def trend_report_tool(start_date=None, end_date=None):
     })
     gpt_text = result["text"]
 
-    # 7) LLM 응답에서 섹션별 본문 추출
+    # LLM 응답에서 섹션별 본문 추출
     def extract_section(text, title):
         pattern = rf"{title}:\s*(.*?)(?=\n(?:개요|국내 뉴스 분석|해외 뉴스 분석|결론):|\Z)"
         match = re.search(pattern, text, re.DOTALL)
         return match.group(1).strip() if match else "[내용 없음]"
 
-    # 8) DOCX 작성 (기존 로직 그대로)
+    # DOCX 작성
     doc = Document()
     doc.add_heading("개요", level=1)
     doc.add_paragraph(extract_section(gpt_text, "개요"))
@@ -742,7 +737,7 @@ async def trend_report_tool(start_date=None, end_date=None):
     report_path = os.path.join("./data/reports", report_filename)
     doc.save(report_path)
 
-    # 9) S3 업로드 및 캐싱
+    # S3 업로드 및 캐싱
     s3_key = f"report/{os.path.basename(report_path)}"
     s3, bucket = get_s3_client_and_bucket()
     with open(report_path, "rb") as f:
@@ -791,7 +786,7 @@ async def competitor_analysis_tool(
         - Retrieves up to three representative articles per competitor using fetch_domestic_articles.
     """
 
-    # 1) Elasticsearch 클라이언트
+    # Elasticsearch 클라이언트 초기화
     es = get_es_client()
     index = os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME")
     if not index:
@@ -800,7 +795,7 @@ async def competitor_analysis_tool(
     competitors_data: List[Dict[str, Any]] = []
 
     for comp in COMPETITORS:
-        # 2) Elasticsearch 집계: 언급량(total mentions)
+        # Elasticsearch 언급량 집계
         try:
             resp_agg = es.search(
                 index=index,
@@ -835,7 +830,7 @@ async def competitor_analysis_tool(
         except Exception:
             mention_count = 0
 
-        # 3) fetch_sentiment_distribution 호출 → 비율(%) 가져오기
+        # fetch_sentiment_distribution 호출 → 비율(%) 가져오기
         try:
             sent = await fetch_sentiment_distribution(
                 keyword=comp,
@@ -849,12 +844,12 @@ async def competitor_analysis_tool(
         except Exception:
             pos_pct = neu_pct = neg_pct = 0
 
-        # 4) 비율(%) × 언급량 → 절대 값(정수)
+        # 비율(%) × 언급량 → 절대 값(정수)
         positive_count = int(mention_count * pos_pct / 100)
         neutral_count = int(mention_count * neu_pct / 100)
         negative_count = int(mention_count * neg_pct / 100)
 
-        # 5) 대표 기사 5건 가져오기 (phrase 매칭)
+        # 대표 기사 5건 가져오기
         try:
             search_res = es.search(
                 index=index,
@@ -910,13 +905,13 @@ async def competitor_analysis_tool(
             "articles": articles
         })
 
-    # 6) 언급량 0인 경쟁사는 제외
+    # 언급량 0인 경쟁사는 제외
     filtered = [c for c in competitors_data if c["article_count"] > 0]
 
-    # 7) 언급량 내림차순 정렬
+    # 언급량 내림차순 정렬
     filtered.sort(key=lambda x: x["article_count"], reverse=True)
 
-    # 8) 스택 바 차트 그릴 데이터 준비
+    # 스택 바 차트 그릴 데이터 준비
     names = [c["name"] for c in filtered]
     pos_vals = [c["positive_count"] for c in filtered]
     neu_vals = [c["neutral_count"] for c in filtered]
@@ -976,11 +971,11 @@ async def competitor_analysis_tool(
         margin=dict(l=40, r=40, t=80, b=120)
     )
 
-    # 10) S3 업로드
+    # S3 업로드
     combined_key = f"competitor/combined_{start_date}_{end_date}_{uuid4().hex[:6]}.png"
     combined_chart_url = upload_chart_to_s3(fig, combined_key)
 
-    # 11) 최종 응답 조립
+    # 최종 응답
     result = {
         "start_date": start_date,
         "end_date": end_date,
@@ -1388,7 +1383,7 @@ async def community_search_tool(
         posts = [post for post in results_sorted if post["source"] == plat][:per_platform]
         balanced_results.extend(posts)
 
-    # 부족한 경우 남은 거 채우기
+    # 게시물 부족한 경우
     remaining = [post for post in results_sorted if post not in balanced_results]
     needed = max_results - len(balanced_results)
     balanced_results.extend(remaining[:needed])
