@@ -3,10 +3,10 @@ from typing import Optional, Dict, Any, Annotated
 
 class DomesticNewsSearchSchema(BaseModel):
     keyword: str = Field(..., description="Primary keyword for search")
-    start_date: Optional[str] = Field(None, description="Search start date (YYYY-MM-DD), defaults to 60 days ago")
+    start_date: Optional[str] = Field(None, description="Search start date (YYYY-MM-DD), defaults to 30 days ago")
     end_date: Optional[str] = Field(None, description="Search end date (YYYY-MM-DD), defaults to yesterday")
-    max_results: int = Field(
-        10, ge=1, le=20, description="Maximum number of results to return (1–20, default 10)"
+    articles_per_day: int = Field(
+        3, ge=1, le=10, description="Number of articles to fetch per day. Defaults to 3."
     )
 
 class ForeignNewsSearchSchema(BaseModel):
