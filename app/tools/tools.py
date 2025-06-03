@@ -25,7 +25,6 @@ from dateutil import parser
 from docx import Document
 from docx.shared import Inches
 from dotenv import load_dotenv
-from elasticsearch import Elasticsearch
 from fake_useragent import UserAgent
 from googleapiclient.discovery import build
 from langchain_community.chat_models import ChatOpenAI
@@ -68,130 +67,214 @@ load_dotenv()
 KST = timezone(timedelta(hours=9))
 
 @tool(args_schema=DomesticNewsSearchSchema)
-@async_time_logger("domestic_it_news_search_tool")
-async def domestic_it_news_search_tool(
+async def domestic_news_search_tool(
     keyword: str,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    max_results:int = 10,
+    start_date: str = None,
+    end_date: str = None,
+    articles_per_day: int = 3
 ) -> Dict[str, Any]:
     """
-    Domestic IT News Search Tool
-
-    When to use:
-        - When precise keyword-based search for domestic IT news is needed.
-        - When searching for news within a specific date range.
+    Aggregates daily mention counts and articles for a keyword, generates a Plotly line chart, and uploads it to S3.
 
     Args:
-        keyword (str): Primary keyword for search
-        start_date (str, optional): Search start date (YYYY-MM-DD), defaults to 60 days ago
-        end_date (str, optional): Search end date (YYYY-MM-DD), defaults to yesterday
-        max_results (int, optional): Maximum number of articles (default 10)
-
+        keyword (str): The search keyword.
+        start_date (str, optional): Start date in YYYY-MM-DD format. Defaults to 30 days ago.
+        end_date (str, optional): End date in YYYY-MM-DD format. Defaults to yesterday.
+        articles_per_day (int, optional): Number of articles to fetch per day. Defaults to 3.
 
     Returns:
-        Dict[str, Any]:
-            - keyword (str): Search keyword
-            - start_date (str): Start date
-            - end_date (str): End date
-            - results (List[Dict]): List of articles with title, content, date, url, media_company
-
-    Notes:
-        - Today's date (after 00:00) or future dates are not supported.
+        Dict[str, Any]: Dictionary containing keyword, date range, dates, mention counts, articles, and chart URL.
     """
+    # 날짜 기본값
     if start_date is None:
-        start_date = (
-            datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=60)
-        ).strftime("%Y-%m-%d")
-
+        start_date = (datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=30)).strftime("%Y-%m-%d")
     if end_date is None:
-        end_date = (
-            datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=1)
-        ).strftime("%Y-%m-%d")
+        end_date = (datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # 캐시 조회
+    # Redis 캐시 조회
     r = get_redis_client()
-    cache_key = f"news:es:flat:{keyword}:{start_date}:{end_date}"
+    cache_key = f"news:es:agg_articles:{keyword}:{start_date}:{end_date}:{articles_per_day}"
     if (cached := r.get(cache_key)):
         return json.loads(cached)
 
-    es = Elasticsearch(
-        hosts=[f"http://{os.getenv('ELASTICSEARCH_HOST')}:{os.getenv('ELASTICSEARCH_PORT')}"],
-        basic_auth=(
-            os.getenv("ELASTICSEARCH_USERNAME"),
-            os.getenv("ELASTICSEARCH_PASSWORD")
-        ),
-        verify_certs=False
-    )
-
-    query = {
+    # Elasticsearch 집계 쿼리
+    es = get_es_client()
+    agg_query = {
         "query": {
             "bool": {
                 "must": [
-                    {
-                        "range": {
-                            "date": {
-                                "gte": f"{start_date}T00:00:00",
-                                "lte": f"{end_date}T23:59:59"
-                            }
-                        }
-                    },
-                    {
-                        "multi_match": {
-                            "query": keyword,
-                            "fields": ["title^2", "content"],
-                        }
-                    }
+                    {"range": {"date": {"gte": f"{start_date}T00:00:00", "lte": f"{end_date}T23:59:59"}}},
+                    {"multi_match": {"query": keyword, "fields": ["title^2", "content"]}}
                 ]
             }
         },
-        "highlight": {
-            "pre_tags": [""],
-            "post_tags": [""],
-            "fields": {
-                "content": {
-                    "fragment_size": 500,
-                    "number_of_fragments": 3,
-                    "no_match_size": 500
+        "aggs": {
+            "by_date": {
+                "date_histogram": {
+                    "field": "date",
+                    "calendar_interval": "day",
+                    "format": "yyyy-MM-dd"
                 }
             }
         },
-        "sort": [
-            {"date": {"order": "desc"}},
-            {"_score": {"order": "desc"}}
-        ],
-        "from": 0,
-        "size": max_results
+        "size": 0
     }
 
-    try:
-        result = es.search(
-            index=os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME"),
-            body=query
-        )
-        hits = result.get("hits", {}).get("hits", [])
-
-        result = {
-            "keyword": keyword,
-            "start_date": start_date,
-            "end_date": end_date,
-            "results": []
+    def get_article_query(date_str: str) -> Dict:
+        return {
+            "query": {
+                "bool": {
+                    "must": [
+                        {"range": {"date": {"gte": f"{date_str}T00:00:00", "lte": f"{date_str}T23:59:59"}}},
+                        {"multi_match": {"query": keyword, "fields": ["title^2", "content"]}}
+                    ]
+                }
+            },
+            "sort": [
+                {"date": {"order": "desc"}},
+                {"_score": {"order": "desc"}}
+            ],
+            "size": articles_per_day,
+            "highlight": {
+                "pre_tags": [""],
+                "post_tags": [""],
+                "fields": {"content": {"fragment_size": 500, "number_of_fragments": 3, "no_match_size": 500}}
+            }
         }
-        for h in hits:
-            source = h["_source"]
-            highlight = h.get("highlight", {})
-            content_snippet = highlight.get("content", [(source.get("content") or "")[:1000]])[0]
 
-            result["results"].append({
-                "title": source.get("title", ""),
-                "content": content_snippet,
-                "date": source.get("date", ""),
-                "url": source.get("url", ""),
-                "media_company": source.get("media_company", "")
-            })
+    try:
+        # 날짜별 언급량 집계
+        agg_result = es.search(
+            index=os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME"),
+            body=agg_query
+        )
+        buckets = agg_result.get("aggregations", {}).get("by_date", {}).get("buckets", [])
+        dates = [b["key_as_string"] for b in buckets]
+        mention_counts = [b["doc_count"] for b in buckets]
 
-        r.set(cache_key, json.dumps(result, ensure_ascii=False))
-        return result
+        if not dates:
+            return {"error": "해당 기간 내 기사 데이터가 없습니다."}
+
+        # 날짜별 기사 목록
+        articles_by_date: Dict[str, Any] = {}
+        for date_str in dates:
+            article_result = es.search(
+                index=os.getenv("ELASTICSEARCH_DOMESTIC_INDEX_NAME"),
+                body=get_article_query(date_str)
+            )
+            hits = article_result.get("hits", {}).get("hits", [])
+            day_list = []
+            for h in hits:
+                src = h["_source"]
+                snippet = h.get("highlight", {}).get("content", [src.get("content", "")[:1000]])[0]
+                day_list.append({
+                    "title": src.get("title", ""),
+                    "content": snippet,
+                    "date": src.get("date", ""),
+                    "url": src.get("url", ""),
+                    "media_company": src.get("media_company", "")
+                })
+            articles_by_date[date_str] = day_list
+
+        chart_url = None
+
+        # 최고점 계산
+        max_count = max(mention_counts)
+        max_idx = mention_counts.index(max_count)
+        peak_date = dates[max_idx]
+        peak_count = max_count
+
+        # Plotly Figure 생성 – 날짜가 2개 이상일 때만
+        if len(dates) > 1:
+            fig = go.Figure()
+
+            fig.add_trace(
+                go.Scatter(
+                    x=dates,
+                    y=mention_counts,
+                    mode="lines+markers",
+                    name=f"'{keyword}' 언급량",
+                    line=dict(color="red", width=2),
+                    marker=dict(size=8, color="red", line=dict(width=2, color="#FFFFFF")),
+                    hovertemplate="%{x}<br>언급량: %{y}<extra></extra>",
+                    fill="tozeroy",
+                    fillcolor="rgba(255, 0, 0, 0.2)"
+                )
+            )
+
+            # 최고점 강조
+            fig.add_trace(
+                go.Scatter(
+                    x=[peak_date],
+                    y=[peak_count],
+                    mode="markers",
+                    name="최고점",
+                    marker=dict(size=12, color="darkred", symbol="circle"),
+                    hovertemplate=f"{peak_date}<br>최고 언급량: {peak_count}<extra></extra>"
+                )
+            )
+
+            # 최고점 날짜 텍스트 표시
+            fig.add_annotation(
+                x=peak_date,
+                y=peak_count,
+                text=f"최고점: {peak_date}",  # “최고점: YYYY-MM-DD” 형태로 표시
+                showarrow=True,
+                arrowhead=2,
+                ax=0,
+                ay=-30,
+                font=dict(color="darkred", size=12)
+            )
+
+            fig.update_layout(
+                title=f"{start_date} ~ {end_date} '{keyword}' 일일 언급량 추이",
+                xaxis=dict(
+                    title="날짜",
+                    tickangle=-45,
+                    tickmode="auto",
+                    nticks=8,
+                    tickformat="%m월 %d일"
+                ),
+                yaxis=dict(
+                    title="언급량",
+                    tickmode="auto",
+                    nticks=6,
+                    rangemode="tozero"
+                ),
+                font=dict(family="Noto Sans CJK KR"),
+                height=500,
+                margin=dict(l=40, r=40, t=80, b=120)
+            )
+
+            # S3 업로드
+            s3_key = (
+                f"daily/{datetime.now(ZoneInfo('Asia/Seoul')).strftime('%Y-%m-%d')}/"
+                f"news_daily_trend_{uuid4().hex[:6]}.png"
+            )
+            chart_url = upload_chart_to_s3(fig, s3_key)
+
+        # 날짜별 언급량
+        mentions_by_date = {date: count for date, count in zip(dates, mention_counts)}
+
+        results_list: List[Dict[str, Any]] = []
+        for date_str, day_list in articles_by_date.items():
+            for art in day_list:
+                results_list.append({
+                    "title": art["title"],
+                    "content": art["content"],
+                    "url": art["url"]
+                })
+
+        result_data = {
+            "keyword": keyword,
+            "mentions_by_date": mentions_by_date,
+            "articles": articles_by_date,
+            "results": results_list,
+            "chart_url": chart_url
+        }
+
+        r.setex(cache_key, timedelta(days=7), json.dumps(result_data, ensure_ascii=False))
+        return result_data
 
     except Exception as e:
         return {"error": f"Elasticsearch search failed: {str(e)}"}
@@ -1922,7 +2005,7 @@ async def paper_search_tool(
 
 tools = [
     web_search_tool,
-    domestic_it_news_search_tool,
+    domestic_news_search_tool,
     foreign_news_search_tool,
     competitor_analysis_tool,
     trend_report_tool,
