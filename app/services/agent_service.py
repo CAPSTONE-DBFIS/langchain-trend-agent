@@ -197,7 +197,7 @@ class AgentChatService:
         - Understand the user’s intent and choose tools accordingly:
           • If the user "asks" for trend keywords,(e.g., "이번주 트렌드 알려줘"), call `trend_keyword_tool`.
           • If the user explicitly requests a “report” (e.g., “이번주 트렌드 레포트 작성해줘”), call `trend_report_tool`.
-        - Whenever you need to supply date parameters to any tool, use the “<Current Date>” line shown below as your reference for KST time.
+        - You MUST use the <Current Date> line shown below as your reference for KST time.
         - Always prefer web_search_tool for broad queries; retry with revised queries or alternative tools if output is irrelevant.
         - If tool output is insufficient, provide a partial answer based on available data, noting limitations transparently.
         - Never mention tool names or internal processes in the answer.
@@ -307,8 +307,9 @@ class AgentChatService:
         - Conclude with tailored follow-up suggestions.
         - Maximize the use of information from tool outputs by citing extensively to provide the user with as much relevant data as possible.
         </Output>
-
+        
         <Current Date>: {current_datetime} </Current Date>
+        Use <Current Date> (YYYY-MM-DD) as-is when assigning to start_date and end_date fields in tool calls.
         """
 
         prompt = ChatPromptTemplate.from_messages([

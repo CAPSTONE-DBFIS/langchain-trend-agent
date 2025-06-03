@@ -1,12 +1,30 @@
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, Annotated
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+def _kst_date(days_offset: int = 0) -> str:
+    return (datetime.now(ZoneInfo("Asia/Seoul")) + timedelta(days=days_offset)).strftime("%Y-%m-%d")
+
 
 class DomesticNewsSearchSchema(BaseModel):
-    keyword: str = Field(..., description="Primary keyword for search")
-    start_date: Optional[str] = Field(None, description="Search start date (YYYY-MM-DD), defaults to 30 days ago")
-    end_date: Optional[str] = Field(None, description="Search end date (YYYY-MM-DD), defaults to yesterday")
+    keyword: str = Field(
+        ...,
+        description="Primary keyword for search."
+    )
+    start_date: str = Field(
+        default_factory=lambda: _kst_date(-30),
+        description="Search start date (YYYY-MM-DD). Defaults to 30 days ago in Asia/Seoul (KST)."
+    )
+    end_date: str = Field(
+        default_factory=lambda: _kst_date(-1),
+        description="Search end date (YYYY-MM-DD). Defaults to yesterday in Asia/Seoul (KST)."
+    )
     articles_per_day: int = Field(
-        3, ge=1, le=10, description="Number of articles to fetch per day. Defaults to 3."
+        3,
+        ge=1,
+        le=10,
+        description="Number of articles to fetch per day. Defaults to 3."
     )
 
 class ForeignNewsSearchSchema(BaseModel):
@@ -16,8 +34,14 @@ class ForeignNewsSearchSchema(BaseModel):
     max_results: int = Field(10, description="Maximum number of articles (default 10, max 20)")
 
 class CompetitorAnalysisSchema(BaseModel):
-    start_date: str = Field( ..., description="Search start date (YYYY-MM-DD)")
-    end_date: str = Field(...,description="Search end date (YYYY-MM-DD), defaults to yesterday")
+    start_date: str = Field(
+        default_factory=lambda: _kst_date(-1),
+        description="Analysis start date (YYYY-MM-DD). Defaults to yesterday in Asia/Seoul (KST)."
+    )
+    end_date: str = Field(
+        default_factory=lambda: _kst_date(-1),
+        description="Analysis end date (YYYY-MM-DD). Defaults to yesterday in Asia/Seoul (KST)."
+    )
 
 class CommunitySearchSchema(BaseModel):
     korean_keyword: str = Field(..., description="Korean keyword for search")
@@ -44,13 +68,28 @@ class WikipediaSchema(BaseModel):
     query: str = Field(..., description="Search keyword")
 
 class GoogleTrendsSchema(BaseModel):
-    query: str = Field(..., description="Search keyword")
-    start_date: Optional[str] = Field(None, description="Start date (YYYY-MM-DD), defaults to last month")
-    end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
+    query: str = Field(
+        ...,
+        description="Search keyword."
+    )
+    start_date: str = Field(
+        default_factory=lambda: _kst_date(-30),
+        description="Start date (YYYY-MM-DD). Defaults to 30 days ago in Asia/Seoul (KST)."
+    )
+    end_date: str = Field(
+        default_factory=lambda: _kst_date(0),
+        description="End date (YYYY-MM-DD). Defaults to today in Asia/Seoul (KST)."
+    )
 
 class TrendReportSchema(BaseModel):
-    start_date: Optional[str] = Field(None, description="Start date (YYYY-MM-DD), defaults to yesterday")
-    end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD), defaults to yesterday")
+    start_date: str = Field(
+        default_factory=lambda: _kst_date(-1),
+        description="Report start date (YYYY-MM-DD). Defaults to yesterday in Asia/Seoul (KST)."
+    )
+    end_date: str = Field(
+        default_factory=lambda: _kst_date(-1),
+        description="Report end date (YYYY-MM-DD). Defaults to yesterday in Asia/Seoul (KST)."
+    )
 
 class TrendKeywordSchema(BaseModel):
     period: str = Field(..., description="'daily' or 'weekly'")
@@ -68,8 +107,25 @@ class Dalle3ImageGenerationSchema(BaseModel):
     prompt: str = Field(..., description="Prompt for image generation")
 
 class PaperSearchSchema(BaseModel):
-    query: str = Field(..., description="English keyword for paper search")
-    max_results: int = Field(default=10, description="Maximum number of papers to return (default 10)", ge=1, le=10)
-    start_date: Optional[str] = Field(None, description="Search start date (YYYY-MM-DD) (default 90 days ago)")
-    end_date: Optional[str] = Field(None, description="Search end date (YYYY-MM-DD) (default today)")
-    sort_by: str = Field(default="relevance", description="Sort by: 'date' (newest) or 'relevance' (most relevant)")
+    query: str = Field(
+        ...,
+        description="English keyword for academic paper search."
+    )
+    max_results: int = Field(
+        10,
+        ge=1,
+        le=10,
+        description="Maximum number of papers to return (default 10, max 10)."
+    )
+    start_date: str = Field(
+        default_factory=lambda: _kst_date(-90),
+        description="Search start date (YYYY-MM-DD). Defaults to 90 days ago in Asia/Seoul (KST)."
+    )
+    end_date: str = Field(
+        default_factory=lambda: _kst_date(0),
+        description="Search end date (YYYY-MM-DD). Defaults to today in Asia/Seoul (KST)."
+    )
+    sort_by: str = Field(
+        "relevance",
+        description="Sort by 'relevance' (default) or 'date' (newest first)."
+    )
