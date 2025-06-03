@@ -461,30 +461,54 @@ async def trend_keyword_tool(*, period: str, date: str) -> Dict[str, Any]:
         for kw, row in zip(df_sent["keyword"], sentiment_rows)
     ]
 
+    # 감정 합계가 0인 경우, 전체 빈도수만큼 neutral 막대를 채우고 색상 회색 처리
+    for i, kw in enumerate(df_sent["keyword"]):
+        total_sent = positive_heights[i] + neutral_heights[i] + negative_heights[i]
+        if total_sent == 0:
+            freq = keyword_freqs[kw]
+            positive_heights[i] = 0
+            neutral_heights[i] = freq
+            negative_heights[i] = 0
+            df_sent.at[i, "no_sentiment"] = True
+        else:
+            df_sent.at[i, "no_sentiment"] = False
+
     # Plotly – stacked bar 생성
     fig_main = go.Figure()
 
+    # 긍정 (positive)
     fig_main.add_trace(go.Bar(
         x=df_sent["keyword"],
         y=positive_heights,
         name="긍정",
-        marker_color="seagreen",
+        marker_color=[
+            "seagreen" if not no_sent else "lightgray"
+            for no_sent in df_sent["no_sentiment"]
+        ],
         hovertemplate="%{x}<br>긍정 수: %{y}<extra></extra>"
     ))
 
+    # 중립 (neutral)
     fig_main.add_trace(go.Bar(
         x=df_sent["keyword"],
         y=neutral_heights,
         name="중립",
-        marker_color="lightgray",
+        marker_color=[
+            "lightgray"
+            for _ in df_sent["no_sentiment"]
+        ],
         hovertemplate="%{x}<br>중립 수: %{y}<extra></extra>"
     ))
 
+    # 부정 (negative)
     fig_main.add_trace(go.Bar(
         x=df_sent["keyword"],
         y=negative_heights,
         name="부정",
-        marker_color="salmon",
+        marker_color=[
+            "salmon" if not no_sent else "lightgray"
+            for no_sent in df_sent["no_sentiment"]
+        ],
         hovertemplate="%{x}<br>부정 수: %{y}<extra></extra>",
         text=[keyword_freqs[kw] for kw in df_sent["keyword"]],
         textposition="outside"
@@ -600,16 +624,10 @@ async def trend_report_tool(start_date=None, end_date=None):
 
     # 국내: 감정 분포 스택형 차트 생성 함수
     async def make_domestic_sentiment_chart(rows: List[tuple], title_prefix: str) -> str:
-        """
-        rows: List of tuples [(keyword, freq), ...]
-        title_prefix: "국내"
-        반환값: 로컬에 저장된 차트 파일 경로 (PNG)
-        """
-        # 키워드와 빈도 dictionary
         keywords = [row[0] for row in rows]
         keyword_freqs: Dict[str, int] = {row[0]: int(row[1]) for row in rows}
 
-        # 감정 분포 비율 조회
+        # 감정 비율 조회
         sentiment_list = []
         for kw in keywords:
             sent = await fetch_sentiment_distribution(kw, start_date, end_date)
@@ -625,7 +643,7 @@ async def trend_report_tool(start_date=None, end_date=None):
 
         df_sent = pd.DataFrame(sentiment_list)
 
-        # 스택형 높이 계산
+        # 스택형 높이 계산 (빈도 × 비율)
         positive_counts = [
             int(keyword_freqs[kw] * row["positive_pct"] / 100)
             for kw, row in zip(df_sent["keyword"], sentiment_list)
@@ -639,28 +657,54 @@ async def trend_report_tool(start_date=None, end_date=None):
             for kw, row in zip(df_sent["keyword"], sentiment_list)
         ]
 
+        # 감정 합계가 0인 경우, 전체 빈도수만큼 neutral_counts에 할당
+        for i, kw in enumerate(df_sent["keyword"]):
+            total_sent = positive_counts[i] + neutral_counts[i] + negative_counts[i]
+            if total_sent == 0:
+                freq = keyword_freqs[kw]
+                positive_counts[i] = 0
+                neutral_counts[i] = freq
+                negative_counts[i] = 0
+                df_sent.at[i, "no_sentiment"] = True
+            else:
+                df_sent.at[i, "no_sentiment"] = False
+
         # Plotly 스택형 바 차트
         fig = go.Figure()
+
+        # 긍정
         fig.add_trace(go.Bar(
             x=df_sent["keyword"],
             y=positive_counts,
             name="긍정 건수",
-            marker_color="seagreen",
+            marker_color=[
+                "seagreen" if not no_sent else "lightgray"
+                for no_sent in df_sent["no_sentiment"]
+            ],
             hovertemplate="%{x}<br>긍정: %{y}<extra></extra>"
         ))
+
+        # 중립
         fig.add_trace(go.Bar(
             x=df_sent["keyword"],
             y=neutral_counts,
             name="중립 건수",
-            marker_color="lightgray",
+            marker_color=[
+                "lightgray"
+                for _ in df_sent["no_sentiment"]
+            ],
             hovertemplate="%{x}<br>중립: %{y}<extra></extra>"
         ))
-        # 부정 trace에 전체 빈도 텍스트 표시
+
+        # 부정
         fig.add_trace(go.Bar(
             x=df_sent["keyword"],
             y=negative_counts,
             name="부정 건수",
-            marker_color="salmon",
+            marker_color=[
+                "salmon" if not no_sent else "lightgray"
+                for no_sent in df_sent["no_sentiment"]
+            ],
             hovertemplate="%{x}<br>부정: %{y}<extra></extra>",
             text=[keyword_freqs[kw] for kw in df_sent["keyword"]],
             textposition="outside"
@@ -671,13 +715,7 @@ async def trend_report_tool(start_date=None, end_date=None):
             title=f"{start_date} ~ {end_date} {title_prefix} 키워드 빈도수 및 감정 분포",
             xaxis=dict(title="키워드", tickangle=-45),
             yaxis=dict(title="총 언급 수"),
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1
-            ),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             font=dict(family="Noto Sans CJK KR"),
             height=450,
             margin=dict(l=40, r=40, t=60, b=100)
