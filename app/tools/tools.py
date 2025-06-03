@@ -554,7 +554,7 @@ async def trend_report_tool(start_date=None, end_date=None):
             - When generating a downloadable document (DOCX) with visualizations.
 
         Args:
-            start_date (str, optional): Start date in format YYYY-MM-DD. Defaults to yesterday.
+            start_date (str, optional): Start date in format YYYY-MM-DD. Defaults to 7 days ago.
             end_date (str, optional): End date in format YYYY-MM-DD. Defaults to yesterday.
 
         Returns:
@@ -987,8 +987,22 @@ async def competitor_analysis_tool(
             "articles": articles
         })
 
-    # 언급량 0인 경쟁사는 제외
-    filtered = [c for c in competitors_data if c["article_count"] > 0]
+    # 언급량이 0이거나 감성 건수 합계가 0인 경쟁사 제외
+    filtered = [
+        c for c in competitors_data
+        if c["article_count"] > 0
+           and (c["positive_count"] + c["neutral_count"] + c["negative_count"]) > 0
+    ]
+
+    if not filtered:
+        # 경쟁사 언급이 하나도 없으면 바로 빈 결과 반환
+        result = {
+            "start_date": start_date,
+            "end_date": end_date,
+            "chart_url": None,
+            "competitors": []
+        }
+        return result
 
     # 언급량 내림차순 정렬
     filtered.sort(key=lambda x: x["article_count"], reverse=True)
@@ -1061,7 +1075,7 @@ async def competitor_analysis_tool(
     result = {
         "start_date": start_date,
         "end_date": end_date,
-        "combined_chart_url": combined_chart_url,
+        "chart_url": combined_chart_url,
         "competitors": filtered
     }
 

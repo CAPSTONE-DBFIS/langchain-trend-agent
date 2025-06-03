@@ -6,7 +6,6 @@ from zoneinfo import ZoneInfo
 def _kst_date(days_offset: int = 0) -> str:
     return (datetime.now(ZoneInfo("Asia/Seoul")) + timedelta(days=days_offset)).strftime("%Y-%m-%d")
 
-
 class DomesticNewsSearchSchema(BaseModel):
     keyword: str = Field(
         ...,
@@ -35,8 +34,8 @@ class ForeignNewsSearchSchema(BaseModel):
 
 class CompetitorAnalysisSchema(BaseModel):
     start_date: str = Field(
-        default_factory=lambda: _kst_date(-1),
-        description="Analysis start date (YYYY-MM-DD). Defaults to yesterday in Asia/Seoul (KST)."
+        default_factory=lambda: _kst_date(-7),
+        description="Analysis start date (YYYY-MM-DD). Defaults to 7 days ago in Asia/Seoul (KST)."
     )
     end_date: str = Field(
         default_factory=lambda: _kst_date(-1),
@@ -83,8 +82,8 @@ class GoogleTrendsSchema(BaseModel):
 
 class TrendReportSchema(BaseModel):
     start_date: str = Field(
-        default_factory=lambda: _kst_date(-1),
-        description="Report start date (YYYY-MM-DD). Defaults to yesterday in Asia/Seoul (KST)."
+        default_factory=lambda: _kst_date(-7),
+        description="Report start date (YYYY-MM-DD). Defaults to 7 days ago in Asia/Seoul (KST)."
     )
     end_date: str = Field(
         default_factory=lambda: _kst_date(-1),
@@ -92,16 +91,16 @@ class TrendReportSchema(BaseModel):
     )
 
 class TrendKeywordSchema(BaseModel):
-    period: str = Field(..., description="'daily' or 'weekly'")
-    date: str = Field(..., description="Reference date (YYYY-MM-DD)")
+    period: str = Field(..., description="'daily', 'weekly' or 'monthly'")
+    date: str = Field(default_factory=lambda: _kst_date(-1), description="Reference date (YYYY-MM-DD)")
 
 class NamuwikiSchema(BaseModel):
     keyword: str = Field(..., description="Search keyword")
 
 class StockHistorySchema(BaseModel):
     symbol: str = Field(..., description="Ticker symbol")
-    start_date: str = Field(..., description="Start date (YYYY-MM-DD)")
-    end_date: str = Field(..., description="End date (YYYY-MM-DD)")
+    start_date: str = Field(default_factory=lambda: _kst_date(-7), description="Start date (YYYY-MM-DD). Defaults to 7 days ago in Asia/Seoul (KST).")
+    end_date: str = Field(default_factory=lambda: _kst_date(), description="End date (YYYY-MM-DD)")
 
 class Dalle3ImageGenerationSchema(BaseModel):
     prompt: str = Field(..., description="Prompt for image generation")
