@@ -13,7 +13,7 @@ class DomesticNewsSearchSchema(BaseModel):
     )
     start_date: str = Field(
         default_factory=lambda: _kst_date(-30),
-        description="Search start date (YYYY-MM-DD). Defaults to 30 days ago in Asia/Seoul (KST)."
+        description="Search start date (YYYY-MM-DD). Must be within the last 60 days (KST)."
     )
     end_date: str = Field(
         default_factory=lambda: _kst_date(-1),
@@ -35,7 +35,7 @@ class ForeignNewsSearchSchema(BaseModel):
 class CompetitorAnalysisSchema(BaseModel):
     start_date: str = Field(
         default_factory=lambda: _kst_date(-7),
-        description="Analysis start date (YYYY-MM-DD). Defaults to 7 days ago in Asia/Seoul (KST)."
+        description="Analysis start date (YYYY-MM-DD). Defaults to 7 days ago in Asia/Seoul (KST). Must be within the last 60 days (KST)."
     )
     end_date: str = Field(
         default_factory=lambda: _kst_date(-1),
@@ -73,7 +73,7 @@ class GoogleTrendsSchema(BaseModel):
     )
     start_date: str = Field(
         default_factory=lambda: _kst_date(-30),
-        description="Start date (YYYY-MM-DD). Defaults to 30 days ago in Asia/Seoul (KST)."
+        description="Start date (YYYY-MM-DD). Defaults to 30 days ago in Asia/Seoul (KST). Must be within the last 60 days (KST)."
     )
     end_date: str = Field(
         default_factory=lambda: _kst_date(0),
@@ -83,7 +83,7 @@ class GoogleTrendsSchema(BaseModel):
 class TrendReportSchema(BaseModel):
     start_date: str = Field(
         default_factory=lambda: _kst_date(-7),
-        description="Report start date (YYYY-MM-DD). Defaults to 7 days ago in Asia/Seoul (KST)."
+        description="Report start date (YYYY-MM-DD). Defaults to 7 days ago in Asia/Seoul (KST). Must be within the last 60 days (KST)."
     )
     end_date: str = Field(
         default_factory=lambda: _kst_date(-1),
