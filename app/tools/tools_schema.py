@@ -13,7 +13,7 @@ class DomesticNewsSearchSchema(BaseModel):
     )
     start_date: str = Field(
         default_factory=lambda: _kst_date(-30),
-        description="Search start date (YYYY-MM-DD). Must be within the last 60 days (KST)."
+        description="Search start date (YYYY-MM-DD). Defaults to 30 days ago in Asia/Seoul (KST). Must be within the last 30 days (KST)."
     )
     end_date: str = Field(
         default_factory=lambda: _kst_date(-1),
