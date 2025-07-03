@@ -310,6 +310,7 @@ class AgentChatService:
         
         <Current Date>: {current_datetime} </Current Date>
         Use <Current Date> (YYYY-MM-DD) as-is when assigning to start_date and end_date fields in tool calls.
+        If a user-provided date is missing the year, you MUST use the current year for the missing year.
         """
 
         prompt = ChatPromptTemplate.from_messages([

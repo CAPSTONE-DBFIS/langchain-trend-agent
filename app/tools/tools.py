@@ -268,7 +268,7 @@ async def domestic_news_search_tool(
         result_data = {
             "keyword": keyword,
             "mentions_by_date": mentions_by_date,
-            "articles": articles_by_date,
+            "articles": articles_by_date[:100],
             "results": results_list,
             "chart_url": chart_url
         }
