@@ -5,7 +5,7 @@
 </p>
 <h1 align="center">TRENDB: IT 트렌드 분석 AI 에이전트</h1>
 <p align="center">다양한 도구를 활용하여 IT 업계 트렌드에 대한 <b>인사이트</b>를 제공하는 지능형 에이전트</p>
-<p align="center"><strong>FastAPI 기반 멀티툴 AI 에이전트 서버</strong></p>
+<p align="center"><strong>FastAPI 기반 AI 에이전트 서버</strong></p>
 <p align="center"><strong>프로젝트 기간: 2024.07.10 ~ 2025.06.04</strong></p>
 
 <p align="center">
